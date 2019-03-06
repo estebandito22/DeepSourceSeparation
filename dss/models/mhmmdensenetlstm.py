@@ -15,7 +15,7 @@ class MHMMDenseNetLSTMModel(nn.Module):
     """Multi-Head MMDenseNetLSTM source separation model."""
 
     def __init__(self, n_classes=1, n_shared_layers=3, in_channels=1,
-                 hidden_size=512, batch_size=64):
+                 hidden_size=128, batch_size=64):
         """Initialize MhMMDenseNetLSTMModel."""
         self.n_classes = n_classes
         self.n_shared_layers = n_shared_layers
@@ -24,7 +24,8 @@ class MHMMDenseNetLSTMModel(nn.Module):
         self.batch_size = batch_size
         super(MHMMDenseNetLSTMModel, self).__init__()
 
-        assert self.n_shared_layers <= 3, "shared layers must be <= 3."
+        assert (self.n_shared_layers <= 10) and (self.n_shared_layers >= 1), \
+            "shared layers must be <= 3."
 
         #
         # Convolution Low approx 4.1kHz
@@ -90,14 +91,23 @@ class MHMMDenseNetLSTMModel(nn.Module):
                       layer7, layer8]
 
         n = 4
-        self.shared_conv_layers_low = nn.ModuleList(
-            all_layers[:self.n_shared_layers])
-        self.class_conv_layers_low = nn.ModuleList(
-            [deepcopy(nn.ModuleList(all_layers[self.n_shared_layers:n]))
-             for _ in range(self.n_classes)])
-        self.class_deconv_layers_low = nn.ModuleList(
-            [deepcopy(nn.ModuleList(all_layers[n:]))
-             for _ in range(self.n_classes)])
+        shared_conv_layers = nn.ModuleList(
+            all_layers[:min(n, self.n_shared_layers)])
+        shared_deconv_layers = nn.ModuleList(
+            all_layers[n:max(n, self.n_shared_layers)])
+        self.shared_layers_low = nn.ModuleDict(
+            {'conv': shared_conv_layers,
+             'deconv': shared_deconv_layers})
+
+        self.class_layers_low = nn.ModuleDict()
+        for i in range(self.n_classes):
+            class_conv_layers = deepcopy(nn.ModuleList(
+                all_layers[min(n, self.n_shared_layers):n]))
+            class_deconv_layers = deepcopy(nn.ModuleList(
+                all_layers[max(n, self.n_shared_layers):]))
+            self.class_layers_low.update(
+                {'conv{}'.format(i): class_conv_layers,
+                 'deconv{}'.format(i): class_deconv_layers})
 
         #
         # Convolution high 11.025kHz
@@ -163,14 +173,23 @@ class MHMMDenseNetLSTMModel(nn.Module):
                       layer7, layer8]
 
         n = 4
-        self.shared_conv_layers_high = nn.ModuleList(
-            all_layers[:self.n_shared_layers])
-        self.class_conv_layers_high = nn.ModuleList(
-            [deepcopy(nn.ModuleList(all_layers[self.n_shared_layers:n]))
-             for _ in range(self.n_classes)])
-        self.class_deconv_layers_high = nn.ModuleList(
-            [deepcopy(nn.ModuleList(all_layers[n:]))
-             for _ in range(self.n_classes)])
+        shared_conv_layers = nn.ModuleList(
+            all_layers[:min(n, self.n_shared_layers)])
+        shared_deconv_layers = nn.ModuleList(
+            all_layers[n:max(n, self.n_shared_layers)])
+        self.shared_layers_high = nn.ModuleDict(
+            {'conv': shared_conv_layers,
+             'deconv': shared_deconv_layers})
+
+        self.class_layers_high = nn.ModuleDict()
+        for i in range(self.n_classes):
+            class_conv_layers = deepcopy(nn.ModuleList(
+                all_layers[min(n, self.n_shared_layers):n]))
+            class_deconv_layers = deepcopy(nn.ModuleList(
+                all_layers[max(n, self.n_shared_layers):]))
+            self.class_layers_high.update(
+                {'conv{}'.format(i): class_conv_layers,
+                 'deconv{}'.format(i): class_deconv_layers})
 
         #
         # Convolution Full
@@ -249,14 +268,23 @@ class MHMMDenseNetLSTMModel(nn.Module):
                       layer7, layer8, layer9, layer10]
 
         n = 5
-        self.shared_conv_layers_full = nn.ModuleList(
-            all_layers[:self.n_shared_layers])
-        self.class_conv_layers_full = nn.ModuleList(
-            [deepcopy(nn.ModuleList(all_layers[self.n_shared_layers:n]))
-             for _ in range(self.n_classes)])
-        self.class_deconv_layers_full = nn.ModuleList(
-            [deepcopy(nn.ModuleList(all_layers[n:]))
-             for _ in range(self.n_classes)])
+        shared_conv_layers = nn.ModuleList(
+            all_layers[:min(n, self.n_shared_layers)])
+        shared_deconv_layers = nn.ModuleList(
+            all_layers[n:max(n, self.n_shared_layers)])
+        self.shared_layers_full = nn.ModuleDict(
+            {'conv': shared_conv_layers,
+             'deconv': shared_deconv_layers})
+
+        self.class_layers_full = nn.ModuleDict()
+        for i in range(self.n_classes):
+            class_conv_layers = deepcopy(nn.ModuleList(
+                all_layers[min(n, self.n_shared_layers):n]))
+            class_deconv_layers = deepcopy(nn.ModuleList(
+                all_layers[max(n, self.n_shared_layers):]))
+            self.class_layers_full.update(
+                {'conv{}'.format(i): class_conv_layers,
+                 'deconv{}'.format(i): class_deconv_layers})
 
         #
         # Final Dense
@@ -275,36 +303,42 @@ class MHMMDenseNetLSTMModel(nn.Module):
         # 1 x 1025 x 129
         self.sigmoid = nn.Sigmoid()
 
-        self._init_weights()
-
-    def _init_weights(self):
-        for class_layers in self.class_final_layers:
-            nn.init.constant_(class_layers[1].bias, 1)
-
     def detach_hidden(self, bs):
         """Detach hidden state of LSTMs."""
-        # detach conv layer lstms
-        for class_layers in self.class_conv_layers_low:
-            for layer in class_layers:
-                for block in layer:
-                    if isinstance(block, DenseLSTMBlock):
-                        block.lstm.detach_hidden(bs)
-        for class_layers in self.class_conv_layers_high:
-            for layer in class_layers:
-                for block in layer:
-                    if isinstance(block, DenseLSTMBlock):
-                        block.lstm.detach_hidden(bs)
-        for class_layers in self.class_conv_layers_full:
-            for layer in class_layers:
-                for block in layer:
-                    if isinstance(block, DenseLSTMBlock):
-                        block.lstm.detach_hidden(bs)
+        # check shared conv layers
+        if len(self.shared_layers_low['conv']) == 4:
+            self.shared_layers_low['conv'][3][1].lstm.detach_hidden(bs)
+        if len(self.shared_layers_high['conv']) == 4:
+            self.shared_layers_high['conv'][3][1].lstm.detach_hidden(bs)
+        if len(self.shared_layers_full['conv']) >= 4:
+            self.shared_layers_full['conv'][3][1].lstm.detach_hidden(bs)
 
-        # detach deconv layer lstms
-        for class_layers in self.class_deconv_layers_low:
-            class_layers[2][0].lstm.detach_hidden(bs)
-        for class_layers in self.class_deconv_layers_full:
-            class_layers[3][0].lstm.detach_hidden(bs)
+        # check shared deconv layers
+        if len(self.shared_layers_low['deconv']) >= 3:
+            self.shared_layers_low['deconv'][2][0].lstm.detach_hidden(bs)
+        if len(self.shared_layers_full['deconv']) >= 4:
+            self.shared_layers_full['deconv'][3][0].lstm.detach_hidden(bs)
+
+        # class specific layers
+        for i in range(self.n_classes):
+            # conv layers
+            if self.class_layers_low['conv{}'.format(i)]:
+                self.class_layers_low[
+                    'conv{}'.format(i)][-1][1].lstm.detach_hidden(bs)
+            if self.class_layers_high['conv{}'.format(i)]:
+                self.class_layers_high[
+                    'conv{}'.format(i)][-1][1].lstm.detach_hidden(bs)
+            if len(self.class_layers_full['conv{}'.format(i)]) >= 2:
+                self.class_layers_full[
+                    'conv{}'.format(i)][-2][1].lstm.detach_hidden(bs)
+
+            # deconv layers
+            if len(self.class_layers_low['deconv{}'.format(i)]) >= 2:
+                self.class_layers_low[
+                    'deconv{}'.format(i)][-2][0].lstm.detach_hidden(bs)
+            if len(self.class_layers_full['deconv{}'.format(i)]) >= 2:
+                self.class_layers_full[
+                    'deconv{}'.format(i)][-2][0].lstm.detach_hidden(bs)
 
     @staticmethod
     def _shared_convolutions(x, shared_conv_layers):
@@ -314,15 +348,15 @@ class MHMMDenseNetLSTMModel(nn.Module):
             x = layer(x)
             shared_conv_outs += [x]
 
-        return x, shared_conv_outs
+        return shared_conv_outs
 
     @staticmethod
-    def _class_convolutions(x, class_conv_layers):
+    def _class_convolutions(shared_conv_outs, class_conv_layers):
         # Class Convolutions
         all_class_conv_outs = []
         for layer_list in class_conv_layers:
             # forward pass and save class specific outputs
-            x1 = x
+            x1 = shared_conv_outs[-1]
             class_conv_outs = []
             for layer in layer_list:
                 x1 = layer(x1)
@@ -332,60 +366,99 @@ class MHMMDenseNetLSTMModel(nn.Module):
         return all_class_conv_outs
 
     @staticmethod
-    def _class_deconvolutions(shared_conv_outs, all_class_conv_outs,
-                              class_deconv_layers):
+    def _shared_deconvolutions(shared_conv_outs, shared_deconv_layers):
+        n_conv_layers = len(shared_conv_outs)
+        # first deconv layer has no skip connection
+        x = shared_deconv_layers[0](shared_conv_outs[-1])
+        # forward pass on remaining deconv layers
+        for j, layer in enumerate(shared_deconv_layers[1:]):
+            reverse_layer_number = n_conv_layers - (j + 2)
+            sc = shared_conv_outs[reverse_layer_number]
+            x = layer(torch.cat([x, sc], dim=1))
+        # batch size x channels x height x width
+        return x, j + 1
+
+    @staticmethod
+    def _class_deconvolutions(x, deconv_pos, shared_conv_outs,
+                              all_class_conv_outs, class_deconv_layers):
         # Class Deconvolutions
-        x3 = []
+        x2 = []
         for i, layer_list in enumerate(class_deconv_layers):
             # combine shared and class specific outputs
-            conv_outs = shared_conv_outs + all_class_conv_outs[i]
+            if all_class_conv_outs:
+                conv_outs = shared_conv_outs + all_class_conv_outs[i]
+            else:
+                conv_outs = shared_conv_outs
             n_conv_layers = len(conv_outs)
-            # first deconv layer has no skip connection
-            x2 = layer_list[0](conv_outs[-1])
+
+            # use x if it exists otherwise we perform all class deconvs
+            if x is None:
+                # first deconv layer has no skip connection
+                x1 = layer_list[0](conv_outs[-1])
+                start = 1
+            else:
+                x1 = x
+                start = 0
+
             # forward pass on remaining deconv layers
-            for j, layer in enumerate(layer_list[1:]):
-                reverse_layer_number = n_conv_layers - (j + 2)
+            for j, layer in enumerate(layer_list[start:]):
+                reverse_layer_number = n_conv_layers - (j + deconv_pos + 2)
                 sc = conv_outs[reverse_layer_number]
-                x2 = layer(torch.cat([x2, sc], dim=1))
-            x3 += [x2]
+                x1 = layer(torch.cat([x1, sc], dim=1))
+            x2 += [x1]
+
         # list : nclasses, batch size x 1 x height x width
-        return x3
+        return x2
 
     def _class_final_dense(self, x):
         outs = []
         for i, layer in enumerate(self.class_final_layers):
-            outs += [layer(x[i])]
+            # x could be from a shared layer
+            if len(x) > 1:
+                x1 = x[i]
+            else:
+                x1 = x[0]
+            outs += [layer(x1)]
         # batch_size x nclasses x 1 x height x width
         return torch.stack(outs, dim=1)
 
+    def _band_forward(self, x, shared_layers, class_layers):
+        shared_conv_outs = self._shared_convolutions(
+            x, shared_layers['conv'])
+
+        if class_layers['conv0']:
+            all_class_conv_outs = self._class_convolutions(
+                shared_conv_outs,
+                [class_layers['conv{}'.format(i)]
+                 for i in range(self.n_classes)])
+        else:
+            all_class_conv_outs = None
+
+        if shared_layers['deconv']:
+            x1, deconv_pos = self._shared_deconvolutions(
+                shared_conv_outs, shared_layers['deconv'])
+        else:
+            x1 = None
+            deconv_pos = 0
+
+        if class_layers['deconv0']:
+            out = self._class_deconvolutions(
+                x1, deconv_pos, shared_conv_outs, all_class_conv_outs,
+                [class_layers['deconv{}'.format(i)]
+                 for i in range(self.n_classes)])
+        else:
+            out = [x1]
+
+        return out
+
     def forward(self, x):
         """Forward Pass."""
-        # low band
-        x1, shared_conv_outs = self._shared_convolutions(
-            x[:, :, :384, :], self.shared_conv_layers_low)
-        all_class_conv_outs = self._class_convolutions(
-            x1, self.class_conv_layers_low)
-        out_low = self._class_deconvolutions(
-            shared_conv_outs, all_class_conv_outs,
-            self.class_deconv_layers_low)
-
-        # high band
-        x1, shared_conv_outs = self._shared_convolutions(
-            x[:, :, 384:, :], self.shared_conv_layers_high)
-        all_class_conv_outs = self._class_convolutions(
-            x1, self.class_conv_layers_high)
-        out_high = self._class_deconvolutions(
-            shared_conv_outs, all_class_conv_outs,
-            self.class_deconv_layers_high)
-
-        # full band
-        x1, shared_conv_outs = self._shared_convolutions(
-            x, self.shared_conv_layers_full)
-        all_class_conv_outs = self._class_convolutions(
-            x1, self.class_conv_layers_full)
-        out_full = self._class_deconvolutions(
-            shared_conv_outs, all_class_conv_outs,
-            self.class_deconv_layers_full)
+        out_low = self._band_forward(
+            x[:, :, :384, :], self.shared_layers_low, self.class_layers_low)
+        out_high = self._band_forward(
+            x[:, :, 384:, :], self.shared_layers_high, self.class_layers_high)
+        out_full = self._band_forward(
+            x, self.shared_layers_full, self.class_layers_full)
 
         out_highlow = [torch.cat([low, high], dim=2)
                        for low, high in zip(out_low, out_high)]
