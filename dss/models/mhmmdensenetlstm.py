@@ -370,6 +370,7 @@ class MHMMDenseNetLSTMModel(nn.Module):
         n_conv_layers = len(shared_conv_outs)
         # first deconv layer has no skip connection
         x = shared_deconv_layers[0](shared_conv_outs[-1])
+        j = -1
         # forward pass on remaining deconv layers
         for j, layer in enumerate(shared_deconv_layers[1:]):
             reverse_layer_number = n_conv_layers - (j + 2)

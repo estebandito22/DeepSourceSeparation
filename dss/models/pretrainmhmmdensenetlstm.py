@@ -18,32 +18,12 @@ class PretrainMHMMDenseNetLSTMModel(MHMMDenseNetLSTMModel):
 
     def forward(self, x):
         """Forward Pass."""
-        # low band
-        x1, shared_conv_outs = self._shared_convolutions(
-            x[:, :, :384, :], self.shared_conv_layers_low)
-        all_class_conv_outs = self._class_convolutions(
-            x1, self.class_conv_layers_low)
-        out_low = self._class_deconvolutions(
-            shared_conv_outs, all_class_conv_outs,
-            self.class_deconv_layers_low)
-
-        # high band
-        x1, shared_conv_outs = self._shared_convolutions(
-            x[:, :, 384:, :], self.shared_conv_layers_high)
-        all_class_conv_outs = self._class_convolutions(
-            x1, self.class_conv_layers_high)
-        out_high = self._class_deconvolutions(
-            shared_conv_outs, all_class_conv_outs,
-            self.class_deconv_layers_high)
-
-        # full band
-        x1, shared_conv_outs = self._shared_convolutions(
-            x, self.shared_conv_layers_full)
-        all_class_conv_outs = self._class_convolutions(
-            x1, self.class_conv_layers_full)
-        out_full = self._class_deconvolutions(
-            shared_conv_outs, all_class_conv_outs,
-            self.class_deconv_layers_full)
+        out_low = self._band_forward(
+            x[:, :, :384, :], self.shared_layers_low, self.class_layers_low)
+        out_high = self._band_forward(
+            x[:, :, 384:, :], self.shared_layers_high, self.class_layers_high)
+        out_full = self._band_forward(
+            x, self.shared_layers_full, self.class_layers_full)
 
         out_highlow = [torch.cat([low, high], dim=2)
                        for low, high in zip(out_low, out_high)]
@@ -51,4 +31,5 @@ class PretrainMHMMDenseNetLSTMModel(MHMMDenseNetLSTMModel):
                    for full, highlow in zip(out_full, out_highlow)]
 
         out = self._class_final_dense(out_all)
+
         return out.squeeze(1)
