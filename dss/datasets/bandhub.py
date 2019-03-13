@@ -10,7 +10,7 @@ class BandhubDataset(BaseBandhub):
     """Class for loading bandhub dataset."""
 
     def __init__(self, metadata, split='train', c=0, upsample=True,
-                 concentration=50., random_seed=None):
+                 concentration=50., mag_func='sqrt', random_seed=None):
         """
         Initialize BandhubDataset.
 
@@ -21,6 +21,7 @@ class BandhubDataset(BaseBandhub):
             c : int, class of target instrument.
             upsample : bool, resample smaller classes to match largest.
             concentration : float, concentration param of dirichlet.
+            mag_func : string, 'sqrt' or 'log' for magnitude.
             random_seed : int, random seed to set for temporal sampling.
 
         """
@@ -30,6 +31,7 @@ class BandhubDataset(BaseBandhub):
         self.c = c
         self.upsample = upsample
         self.concentration = concentration
+        self.mag_func = mag_func
         self.random_seed = random_seed
         self.target_indexes = None
         self.related_tracks_idxs = None

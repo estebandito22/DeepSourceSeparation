@@ -10,7 +10,7 @@ class BandhubPredset(BaseBandhub):
     """Class for loading bandhub dataset during predictions."""
 
     def __init__(self, metadata, split='train', concentration=50.,
-                 random_seed=None):
+                 mag_func='sqrt', random_seed=None):
         """
         Initialize BandhubPredset.
 
@@ -19,6 +19,7 @@ class BandhubPredset(BaseBandhub):
             metadata : dataframe, of audio metadata.
             split : string, 'train', 'val' or 'test'.
             concentration : float, concentration param of dirichlet.
+            mag_func : string, 'sqrt' or 'log' for magnitude.
             random_seed : int, random seed to set for temporal sampling.
 
         """
@@ -26,6 +27,7 @@ class BandhubPredset(BaseBandhub):
         self.metadata = metadata
         self.split = split
         self.concentration = concentration
+        self.mag_func = mag_func
         self.random_seed = random_seed
         self.target_indexes = None
         self.related_tracks_idxs = None
@@ -49,10 +51,6 @@ class BandhubPredset(BaseBandhub):
         """Return a sample from the dataset."""
         related_track_idxs = self.related_track_idxs.iat[i]
 
-        # sample volume alphas
-        n_related = len(related_track_idxs)
-        volume_alphas = self._sample_volume_alphas(n_related)
-
         # set random seed for all sampling
         seed = np.random.randint(0, 1000)
 
@@ -61,7 +59,8 @@ class BandhubPredset(BaseBandhub):
             # load metadata and temp stft tensor
             stft_path = self.metadata.at[track_idx, 'stft_path']
             instrument = self.metadata.at[track_idx, 'instrument']
-            tmp = self._load(stft_path, volume_alphas[j], seed)
+            volume = self.metadata.at[track_idx, 'trackVolume']
+            tmp = self._load(stft_path, volume, seed)
 
             # initialize tensors
             if j == 0:

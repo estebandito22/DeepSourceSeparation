@@ -28,26 +28,57 @@ class BaseBandhub(BaseAudio):
 
     def _train_test_split(self):
         # create train and val and test splits for artist splitting
+        if 'split' in self.metadata.columns:
+            train_songs = self.metadata[
+                self.metadata['split'] == 'train']['songId'].unique()
+            val_songs = self.metadata[
+                self.metadata['split'] == 'val']['songId'].unique()
+            test_songs = self.metadata[
+                self.metadata['split'] == 'test']['songId'].unique()
+            self.metadata.drop('split', axis=1, inplace=True)
 
-        tracks = self.metadata['trackId'].get_values()
-        songs = self.metadata['songId'].get_values()
+            if not val_songs:
 
-        # train split
-        np.random.seed(10)
-        tracks, songs = shuffle(tracks, songs)
-        gss = GroupShuffleSplit(n_splits=1, test_size=.3, random_state=10)
-        train_mask, val_test_mask = next(
-            gss.split(X=tracks, y=None, groups=songs))
-        train_songs = songs[train_mask]
-        val_test_tracks = tracks[val_test_mask]
-        val_test_songs = songs[val_test_mask]
+                tracks = self.metadata[
+                    self.metadata['songId'].isin(
+                        train_songs)]['trackId'].get_values()
+                songs = self.metadata[
+                    self.metadata['songId'].isin(
+                        train_songs)]['songId'].get_values()
 
-        # test and val splits
-        gss = GroupShuffleSplit(n_splits=1, test_size=.1/.3, random_state=10)
-        test_mask, val_mask = next(
-            gss.split(X=val_test_tracks, y=None, groups=val_test_songs))
-        val_songs = val_test_songs[val_mask]
-        test_songs = val_test_songs[test_mask]
+                # test split
+                np.random.seed(10)
+                tracks, songs = shuffle(tracks, songs)
+
+                gss = GroupShuffleSplit(
+                    n_splits=1, test_size=0.1, random_state=10)
+                train_mask, val_mask = next(
+                    gss.split(X=tracks, y=None, groups=songs))
+                val_songs = songs[val_mask]
+                train_songs = songs[train_mask]
+
+        else:
+            tracks = self.metadata['trackId'].get_values()
+            songs = self.metadata['songId'].get_values()
+
+            # test split
+            np.random.seed(10)
+            tracks, songs = shuffle(tracks, songs)
+            gss = GroupShuffleSplit(
+                n_splits=1, test_size=.2, random_state=10)
+            train_val_mask, test_mask = next(
+                gss.split(X=tracks, y=None, groups=songs))
+            test_songs = songs[test_mask]
+            train_val_tracks = tracks[train_val_mask]
+            train_val_songs = songs[train_val_mask]
+
+            # train and val splits
+            gss = GroupShuffleSplit(
+                n_splits=1, test_size=.1/.8, random_state=10)
+            train_mask, val_mask = next(
+                gss.split(X=train_val_tracks, y=None, groups=train_val_songs))
+            val_songs = train_val_songs[val_mask]
+            train_songs = train_val_songs[train_mask]
 
         if self.split == 'train':
             self.metadata = self.metadata[
@@ -64,7 +95,7 @@ class BaseBandhub(BaseAudio):
             torch.tensor([self.concentration for _ in range(n_related)]))
         if self.random_seed is not None:
             torch.manual_seed(self.random_seed)
-        return dirichlet.sample()
+        return dirichlet.sample() * float(self.n_classes)
 
     def __len__(self):
         """Return length of the dataset."""

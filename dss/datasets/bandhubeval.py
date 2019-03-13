@@ -14,7 +14,7 @@ class BandhubEvalset(BandhubPredset):
     """Class for loading bandhub dataset during evaluation."""
 
     def __init__(self, metadata, split='train', concentration=50.,
-                 random_seed=None):
+                 mag_func='sqrt', random_seed=None):
         """
         Initialize BandhubEvalset.
 
@@ -23,12 +23,13 @@ class BandhubEvalset(BandhubPredset):
             metadata : dataframe, of audio metadata.
             split : string, 'train', 'val' or 'test'.
             concentration : float, concentration param of dirichlet.
+            mag_func : string, 'sqrt' or 'log' for magnitude.
             random_seed : int, random seed to set for temporal sampling.
-            
+
         """
         BandhubPredset.__init__(
             self, metadata=metadata, split=split, concentration=concentration,
-            random_seed=random_seed)
+            mag_func=mag_func, random_seed=random_seed)
 
     @staticmethod
     def _split_track(X, length, dim=1):
@@ -91,16 +92,13 @@ class BandhubEvalset(BandhubPredset):
         """Return a sample from the dataset."""
         related_track_idxs = self.related_track_idxs.iat[i]
 
-        # sample volume alphas
-        n_related = len(related_track_idxs)
-        volume_alphas = self._sample_volume_alphas(n_related)
-
         # load STFT of related stems, sample and add
         for j, track_idx in enumerate(related_track_idxs):
             # load metadata and temp stft tensor
             stft_path = self.metadata.at[track_idx, 'stft_path']
             instrument = self.metadata.at[track_idx, 'instrument']
-            tmp = self._load(stft_path, volume_alphas[j])
+            volume = self.metadata.at[track_idx, 'trackVolume']
+            tmp = self._load(stft_path, volume)
 
             # initialize tensors
             if j == 0:

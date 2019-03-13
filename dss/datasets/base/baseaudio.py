@@ -14,6 +14,7 @@ class BaseAudio(Dataset):
     def __init__(self):
         """Initialize BaseAudio dataset."""
         self.random_seed = None
+        self.mag_func = 'sqrt'
 
     def _sample(self, X, length, dim=1, random_seed=None):
         if random_seed is not None:
@@ -91,9 +92,13 @@ class BaseAudio(Dataset):
             return torch.zeros_like(x)
         return (x - x.min()) / (x.max() - x.min())
 
-    @staticmethod
-    def _stft_mag(x):
-        return torch.sqrt(torch.sum(x ** 2, dim=-1))
+    def _stft_mag(self, x):
+        power = torch.sum(x ** 2, dim=-1)
+        if self.mag_func == 'sqrt':
+            mag = torch.sqrt(power)
+        elif self.mac_fun == 'log':
+            mag = torch.log1p(power)
+        return mag
 
     def __len__(self):
         """Return length of the dataset."""
