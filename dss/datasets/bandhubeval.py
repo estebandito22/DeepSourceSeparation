@@ -13,8 +13,8 @@ class BandhubEvalset(BandhubPredset):
 
     """Class for loading bandhub dataset during evaluation."""
 
-    def __init__(self, metadata, split='train', concentration=50.,
-                 mag_func='sqrt', random_seed=None):
+    def __init__(self, metadata, split='train', mag_func='sqrt', n_frames=513,
+                 random_seed=None):
         """
         Initialize BandhubEvalset.
 
@@ -24,12 +24,13 @@ class BandhubEvalset(BandhubPredset):
             split : string, 'train', 'val' or 'test'.
             concentration : float, concentration param of dirichlet.
             mag_func : string, 'sqrt' or 'log' for magnitude.
+            n_frames : int, number of samples in time.
             random_seed : int, random seed to set for temporal sampling.
 
         """
         BandhubPredset.__init__(
-            self, metadata=metadata, split=split, concentration=concentration,
-            mag_func=mag_func, random_seed=random_seed)
+            self, metadata=metadata, split=split, mag_func=mag_func,
+            n_frames=n_frames, random_seed=random_seed)
 
     @staticmethod
     def _split_track(X, length, dim=1):
@@ -64,13 +65,15 @@ class BandhubEvalset(BandhubPredset):
         for sample in samples_list:
             if sample['ns'] < max_ns:
                 pad_width = max_ns - sample['ns']
-                sample['X'] = F.pad(sample['X'], (0, 0, 0, 0, 0, pad_width))
+                sample['X'] = F.pad(
+                    sample['X'], (0, 0, 0, 0, 0, 0, 0, pad_width))
                 sample['X_complex'] = F.pad(
-                    sample['X_complex'], (0, 0, 0, 0, 0, 0, 0, pad_width))
+                    sample['X_complex'],
+                    (0, 0, 0, 0, 0, 0, 0, 0, 0, pad_width))
             if sample['t'] < max_t:
                 sample['y_complex'] = F.pad(
                     sample['y_complex'],
-                    (0, 0, 0, max_t - sample['t'], 0, 0, 0, 0))
+                    (0, 0, 0, max_t - sample['t'], 0, 0, 0, 0, 0, 0))
 
             for k, v in sample.items():
                 samples[k].append(v)
@@ -114,12 +117,24 @@ class BandhubEvalset(BandhubPredset):
 
         # take magnitude of combined stems and scale and split into chunks
         X_complex = torch.zeros_like(X).copy_(X)
-        X_complex, _ = self._split_track(X_complex, 129, 1)
         X = self._stft_mag(X)
-        X, ns = self._split_track(X, 129, 1)
-
         # stack targets and add metadata for collate function
         y_all_complex = torch.stack(y_all_complex)
+
+        if X.dim() == 2:
+            X_complex, _ = self._split_track(X_complex, self.n_frames, 1)
+            X_complex = X_complex.unsqueeze(1)
+            X, ns = self._split_track(X, self.n_frames, 1)
+            X = X.unsqueeze(1)
+            y_all_complex = y_all_complex.unsqueeze(1)
+        else:
+            X_complex0, _ = self._split_track(X_complex[0], self.n_frames, 1)
+            X_complex1, _ = self._split_track(X_complex[1], self.n_frames, 1)
+            X_complex = torch.stack([X_complex0, X_complex1], dim=1)
+            X0, _ = self._split_track(X[0], self.n_frames, 1)
+            X1, ns = self._split_track(X[1], self.n_frames, 1)
+            X = torch.stack([X0, X1], dim=1)
+
         t = torch.tensor([y_all_complex.size(-2)])
         c = torch.tensor(c_all).long()
 

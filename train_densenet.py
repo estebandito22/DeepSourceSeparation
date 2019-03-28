@@ -30,8 +30,24 @@ if __name__ == '__main__':
                     help="Number of shared layers in UNet.")
     ap.add_argument("-ic", "--in_channels", type=int, default=1,
                     help="Input channels to UNet.")
+    ap.add_argument("-ks", "--kernel_size", type=int, default=3,
+                    help="Kernel size for convolutional layers.")
     ap.add_argument("-hs", "--hidden_size", type=int, default=512,
                     help="Hidden size for LSTM.")
+    ap.add_argument("-la", "--loss_alphas", action='store_true',
+                    help="Use loss alphas.")
+    ap.add_argument("-nm", "--normalize_masks", action='store_true',
+                    help="Normalize predicted masks.")
+    ap.add_argument("-us", "--upper_bound_slope", type=float, default=1/100,
+                    help="Slope of the upper bound curriculum.")
+    ap.add_argument("-ls", "--lower_bound_slope", type=float, default=1/400,
+                    help="Slope of the lower bound curriculum.")
+    ap.add_argument("-mf", "--mag_func", default='sqrt',
+                    help="Function to use on spectrograms, 'sqrt' or 'log'.")
+    ap.add_argument("-nf", "--n_frames", type=int, default=513,
+                    help="Number of samples to use in the time domain.")
+    ap.add_argument("-th", "--threshold", type=float,
+                    help="Threshold below which volume alphas are set to 0.0.")
     ap.add_argument("-bs", "--batch_size", type=int, default=2,
                     help="Batch size for optimization.")
     ap.add_argument("-lr", "--learning_rate", type=float, default=0.001,
@@ -48,16 +64,44 @@ if __name__ == '__main__':
                     help="Location to save the model.")
     ap.add_argument("-pp", "--pretrained_path",
                     help="Location of pretrained model.")
+    ap.add_argument("-ev", "--eval_version",
+                    help="Vertsion of BSS to use for evaluation.")
+    ap.add_argument("-tc", "--train_class", type=int,
+                    help="Specific class to train. -1 is all -999 is random.")
+    ap.add_argument("-nfft", "--n_fft", type=int, default=1025,
+                    help="Number of FFT corresponds to input frequency.")
+    ap.add_argument("-cs", "--chan_swap", type=float, default=0.0,
+                    help="Mean of Bernoulli for channel swapping.")
+    ap.add_argument("-cp", "--continue_path",
+                    help="Path to model for warm start.")
+    ap.add_argument("-ce", "--continue_epoch", type=int,
+                    help="Epoch of model for ward start.")
     args = vars(ap.parse_args())
 
+    print("\n\nLoading " + args['metadata_path'] + "\n\n")
+
     df = pd.read_csv(args['metadata_path'])
-    # df = df[df['instrument'].isin([2, 7, 0, 3, 5])]
-    # df['instrument'] = df['instrument'].astype('category').cat.codes
+
     classes = df['instrument'].unique()
-    train_datasets = BandhubDataset(df, 'train')
-    val_datasets = BandhubDataset(df, 'val', random_seed=0)
-    train_predset = BandhubPredset(df, 'train', random_seed=0)
-    val_predset = BandhubPredset(df, 'val', random_seed=0)
+
+    train_datasets = BandhubDataset(
+        df, 'train', mag_func=args['mag_func'], n_frames=args['n_frames'],
+        upper_bound_slope=args['upper_bound_slope'],
+        lower_bound_slope=args['lower_bound_slope'],
+        threshold=args['threshold'],
+        chan_swap=args['chan_swap'])
+
+    val_datasets = BandhubDataset(
+        df, 'val', mag_func=args['mag_func'], n_frames=args['n_frames'],
+        concentration=1000., random_seed=0)
+
+    train_predset = BandhubPredset(
+        df, 'train', mag_func=args['mag_func'], n_frames=args['n_frames'],
+        random_seed=0)
+
+    val_predset = BandhubPredset(
+        df, 'val', mag_func=args['mag_func'], n_frames=args['n_frames'],
+        random_seed=0)
 
     if args['pretrained_path'] is not None:
         with open(args['pretrained_path'], 'rb') as model_dict:
@@ -72,12 +116,24 @@ if __name__ == '__main__':
     dnet = MHMMDenseNetLSTM(n_classes=len(classes),
                             n_shared_layers=args['n_shared_layers'],
                             in_channels=args['in_channels'],
+                            kernel_size=args['kernel_size'],
                             hidden_size=args['hidden_size'],
+                            loss_alphas=args['loss_alphas'],
+                            normalize_masks=args['normalize_masks'],
                             batch_size=args['batch_size'],
                             lr=args['learning_rate'],
                             weight_decay=args['weight_decay'],
                             num_epochs=args['num_epochs'],
-                            objective=args['objective'])
+                            objective=args['objective'],
+                            eval_version=args['eval_version'],
+                            train_class=args['train_class'],
+                            n_fft=args['n_fft'])
+
+    if args['continue_path'] and args['continue_epoch']:
+        dnet.load(args['continue_path'], args['continue_epoch'])
+        warm_start = True
+    else:
+        warm_start = False
 
     dnet.fit(train_datasets, val_datasets, train_predset, val_predset,
-             args['save_dir'], pretrained_state)
+             args['save_dir'], pretrained_state, warm_start)

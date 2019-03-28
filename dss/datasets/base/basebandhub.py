@@ -4,9 +4,6 @@ import numpy as np
 from sklearn.utils import shuffle
 from sklearn.model_selection import GroupShuffleSplit
 
-import torch
-from torch.distributions.dirichlet import Dirichlet
-
 from dss.datasets.base.baseaudio import BaseAudio
 
 
@@ -27,6 +24,7 @@ class BaseBandhub(BaseAudio):
             'songId')['trackId'].apply(lambda x: list(x.index.get_values()))
 
     def _train_test_split(self):
+        self.metadata = self.metadata.copy()
         # create train and val and test splits for artist splitting
         if 'split' in self.metadata.columns:
             train_songs = self.metadata[
@@ -35,7 +33,6 @@ class BaseBandhub(BaseAudio):
                 self.metadata['split'] == 'val']['songId'].unique()
             test_songs = self.metadata[
                 self.metadata['split'] == 'test']['songId'].unique()
-            self.metadata.drop('split', axis=1, inplace=True)
 
             if not val_songs:
 
@@ -89,13 +86,6 @@ class BaseBandhub(BaseAudio):
         elif self.split == 'test':
             self.metadata = self.metadata[
                 self.metadata['songId'].isin(test_songs)]
-
-    def _sample_volume_alphas(self, n_related):
-        dirichlet = Dirichlet(
-            torch.tensor([self.concentration for _ in range(n_related)]))
-        if self.random_seed is not None:
-            torch.manual_seed(self.random_seed)
-        return dirichlet.sample() * float(self.n_classes)
 
     def __len__(self):
         """Return length of the dataset."""

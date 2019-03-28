@@ -9,9 +9,9 @@ from preprocessing.stfttensor import STFTTransformer
 
 
 def main(meta_file, save_dir, overwrite, n_fft, hop_length, groups,
-         group, out_q):
+         group, out_q, mono, sample_rate):
     """Execute stft transform."""
-    stft = STFTTransformer(n_fft, hop_length)
+    stft = STFTTransformer(n_fft, hop_length, mono, sample_rate)
     stft.transform(
         meta_file, save_dir, overwrite, groups, group, out_q)
 
@@ -31,6 +31,10 @@ if __name__ == '__main__':
                     help="n_fft to use in melspectrogram transform.")
     ap.add_argument("-hl", "--hop_length", default=512, type=int,
                     help="Hop length to use in melspectrogram transform.")
+    ap.add_argument("-mo", "--mono", action='store_true',
+                    help="Convert to mono.")
+    ap.add_argument("-sr", "--sample_rate", type=int, default=22050,
+                    help="Sample rate for loading audio.")
     args = vars(ap.parse_args())
 
     sd = args['save_dir']
@@ -39,6 +43,8 @@ if __name__ == '__main__':
     ov = args["overwrite"]
     nf = args["n_fft"]
     hl = args["hop_length"]
+    mo = args["mono"]
+    sr = args["sample_rate"]
 
     r = mp.cpu_count()
     o_q = mp.Queue()
@@ -46,7 +52,7 @@ if __name__ == '__main__':
     processes = []
     for i in range(r):
         p = Process(
-            target=main, args=(mf, sd, ov, nf, hl, r, i, o_q))
+            target=main, args=(mf, sd, ov, nf, hl, r, i, o_q, mo, sr))
         p.start()
         processes.append(p)
 

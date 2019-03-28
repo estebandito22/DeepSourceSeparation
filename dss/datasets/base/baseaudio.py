@@ -13,8 +13,6 @@ class BaseAudio(Dataset):
 
     def __init__(self):
         """Initialize BaseAudio dataset."""
-        self.random_seed = None
-        self.mag_func = 'sqrt'
 
     def _sample(self, X, length, dim=1, random_seed=None):
         if random_seed is not None:
@@ -25,9 +23,9 @@ class BaseAudio(Dataset):
             rand_start = np.random.randint(0, X.size()[dim] - length)
         else:
             if dim == 0:
-                X = F.pad(X, (0, 0, 0, length - X.size()[dim]))
-            elif dim == 1:
                 X = F.pad(X, (0, length - X.size()[dim], 0, 0))
+            elif dim == 1:
+                X = F.pad(X, (0, 0, 0, length - X.size()[dim]))
             else:
                 raise ValueError("dim must be 0 or 1.")
             return X
@@ -78,12 +76,22 @@ class BaseAudio(Dataset):
 
     def _load_transform(self, stft_path, volume, seed):
         stft = torch.load(stft_path)
-        stft = self._sample(stft, 129, 1, seed)
+        if stft.dim() == 4:
+            stft0 = self._sample(stft[0], self.n_frames, 1, seed)
+            stft1 = self._sample(stft[1], self.n_frames, 1, seed)
+            stft = torch.stack([stft0, stft1])
+        else:
+            stft = self._sample(stft, self.n_frames, 1, seed)
         return self._stft_mag(stft)
 
     def _load(self, stft_path, volume, seed):
         stft = torch.load(stft_path)
-        stft = self._sample(stft, 129, 1, seed)
+        if stft.dim() == 4:
+            stft0 = self._sample(stft[0], self.n_frames, 1, seed)
+            stft1 = self._sample(stft[1], self.n_frames, 1, seed)
+            stft = torch.stack([stft0, stft1])
+        else:
+            stft = self._sample(stft, self.n_frames, 1, seed)
         return torch.mul(stft, volume)
 
     @staticmethod
@@ -96,8 +104,8 @@ class BaseAudio(Dataset):
         power = torch.sum(x ** 2, dim=-1)
         if self.mag_func == 'sqrt':
             mag = torch.sqrt(power)
-        elif self.mac_fun == 'log':
-            mag = torch.log1p(power)
+        elif self.mag_func == 'log':
+            mag = torch.log1p(torch.sqrt(power))
         return mag
 
     def __len__(self):

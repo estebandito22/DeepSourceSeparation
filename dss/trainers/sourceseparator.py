@@ -9,12 +9,15 @@ from tqdm import tqdm
 
 from librosa.core import istft
 from mir_eval.separation import bss_eval_sources
+# from museval.metrics import bss_eval
+from museval import evaluate
 
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
 
 from dss.trainers.trainer import Trainer
+from dss.utils.utils import mwf
 
 
 class SourceSeparator(Trainer):
@@ -25,21 +28,11 @@ class SourceSeparator(Trainer):
         """Initialize SourceSeparator Trainer."""
         Trainer.__init__(self)
 
-        # Trainer attributes
-        self.batch_size = None
-
-        # Model attributes
-        self.model = None
-        self.nn_epoch = 0
-
-        self.save_dir = None
-        self.USE_CUDA = torch.cuda.is_available()
-
     def fit(self):
         """Fit function."""
         raise NotImplementedError("Not yet implemented!")
 
-    def score(self, loader):
+    def score(self, loader, framewise=False):
         """
         Score the model.
 
@@ -53,8 +46,20 @@ class SourceSeparator(Trainer):
         class_sir = defaultdict(list)
         class_sar = defaultdict(list)
 
+        # only perform framewise evaluation at testing time
+        if self.n_fft == 1025:
+            rate = 22050
+            hop = 512
+            win = 2048
+        elif self.n_fft == 2049:
+            rate = 44100
+            hop = 1024
+            win = 4096
+        if not framewise:
+            rate = np.inf
+
         # list of batches
-        preds, ys, cs, ts = self.predict(loader)
+        preds, ys, cs, ts, _ = self.predict(loader)
 
         # for each batch
         for b_preds, b_ys, b_cs, b_ts in tqdm(list(zip(preds, ys, cs, ts))):
@@ -67,12 +72,21 @@ class SourceSeparator(Trainer):
                 for i, (c_pred, c_y, c_c) in enumerate(zip(pred, y, c)):
                     # if the class exists in the source signal
                     if c_c == 1 and np.abs(c_y).sum() > 0:
-                        c_pred = c_pred[:, :t]
-                        c_y = c_y[:, :t]
-                        pred_recons += [istft(
-                            c_pred, hop_length=512, win_length=2048)]
-                        y_recons += [istft(
-                            c_y, hop_length=512, win_length=2048)]
+                        c_pred = c_pred[..., :t]
+                        c_y = c_y[..., :t]
+                        # predictions can be over multiple channels
+                        pred_recon = []
+                        y_recon = []
+                        for c_pred_chan, c_y_chan in zip(c_pred, c_y):
+                            pred_recon += [istft(
+                                c_pred_chan, hop_length=hop, win_length=win)]
+                            y_recon += [istft(
+                                c_y_chan, hop_length=hop, win_length=win)]
+                        pred_recon = np.stack(pred_recon, axis=-1)
+                        y_recon = np.stack(y_recon, axis=-1)
+                        # accumulate list of reconstructions for stacking
+                        pred_recons += [pred_recon]
+                        y_recons += [y_recon]
                         pred_cs += [i]
                 # possible to sample from targets that are all zeros
                 if pred_recons:
@@ -82,8 +96,17 @@ class SourceSeparator(Trainer):
                     if np.abs(pred_recons.sum()) > 0:
                         y_recons = np.stack(y_recons)
                         # nclassex x time
-                        sdr, sir, sar, _ = bss_eval_sources(
-                            y_recons, pred_recons, compute_permutation=False)
+                        if self.eval_version == 'v3':
+                            sdr, sir, sar, _ = bss_eval_sources(
+                                y_recons, pred_recons,
+                                compute_permutation=False)
+                        elif self.eval_version == 'v4':
+                            sdr, _, sir, sar = evaluate(
+                                y_recons, pred_recons, win=rate, hop=rate,
+                                padding=False)
+                            sdr = np.nanmean(sdr, axis=1)
+                            sir = np.nanmean(sir, axis=1)
+                            sar = np.nanmean(sar, axis=1)
                         for m1, m2, m3, cl in zip(sdr, sir, sar, pred_cs):
                             class_sdr[cl] += [m1]
                             class_sir[cl] += [m2]
@@ -133,11 +156,39 @@ class SourceSeparator(Trainer):
                 new_state[k].copy_(pretrained_state[k])
             else:
                 pre_key = k.split('.')
-                pre_key[1] = str(0)
+                pre_key[1] = pre_key[1][:-1] + str(0)
                 pre_key = '.'.join(pre_key)
                 new_state[k].copy_(pretrained_state[pre_key])
         self.model.load_state_dict(new_state)
         print("Loaded pretrained model...")
+
+    def _report(self, train_loss, train_sdr, train_sir, train_sar, val_loss,
+                val_sdr, val_sir, val_sar):
+        e = 'Epoch: [{}/{}]'.format(self.nn_epoch, self.num_epochs)
+        tl = 'Train Loss Weighted: {}'.format(train_loss)
+        tsdr = 'Train SDR: {}'.format(train_sdr)
+        tsir = 'Train SIR: {}'.format(train_sir)
+        tsar = 'Train SAR: {}'.format(train_sar)
+        vl = 'Val Loss Weighted: {}'.format(val_loss)
+        vsdr = 'Val SDR: {}'.format(val_sdr)
+        vsir = 'Val SIR: {}'.format(val_sir)
+        vsar = 'Val SAR: {}'.format(val_sar)
+
+        text = ["\n", e, "\n\n", tl, "\t", tsdr, "\t", tsir, "\t", tsar,
+                "\n\n", vl, "\t", vsdr, "\t", vsir, "\t", vsar]
+
+        print(''.join(text), flush=True)
+
+    def _apply_loss_weights(self, x, y):
+        y_norms = torch.norm(y, dim=(3, 4)).mean(dim=0)
+        y_alphas = (y_norms[0] / y_norms) / torch.sum(y_norms[0] / y_norms)
+        if not y_alphas.sum() < float('inf'):
+            y_alphas = torch.ones((1, self.n_classes)).div_(self.n_classes)
+            if self.USE_CUDA:
+                y_alphas = y_alphas.cuda()
+        res = (x.transpose_(1, 0).contiguous().view(4, -1).mean(dim=1)
+               * y_alphas.squeeze())
+        return res.sum()
 
     def save(self):
         """
@@ -169,7 +220,7 @@ class SourceSeparator(Trainer):
         ----
             model_dir : directory where models are saved.
             epoch : epoch of model to load.
-            
+
         """
         epoch_file = "epoch_{}".format(epoch) + '.pth'
         model_file = os.path.join(model_dir, epoch_file)

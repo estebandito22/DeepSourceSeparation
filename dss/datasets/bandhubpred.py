@@ -9,8 +9,8 @@ class BandhubPredset(BaseBandhub):
 
     """Class for loading bandhub dataset during predictions."""
 
-    def __init__(self, metadata, split='train', concentration=50.,
-                 mag_func='sqrt', random_seed=None):
+    def __init__(self, metadata, split='train', mag_func='sqrt', n_frames=513,
+                 random_seed=None):
         """
         Initialize BandhubPredset.
 
@@ -18,16 +18,16 @@ class BandhubPredset(BaseBandhub):
         ----
             metadata : dataframe, of audio metadata.
             split : string, 'train', 'val' or 'test'.
-            concentration : float, concentration param of dirichlet.
             mag_func : string, 'sqrt' or 'log' for magnitude.
+            n_frames : int, number of samples in time.
             random_seed : int, random seed to set for temporal sampling.
 
         """
         BaseBandhub.__init__(self)
         self.metadata = metadata
         self.split = split
-        self.concentration = concentration
         self.mag_func = mag_func
+        self.n_frames = n_frames
         self.random_seed = random_seed
         self.target_indexes = None
         self.related_tracks_idxs = None
@@ -77,9 +77,14 @@ class BandhubPredset(BaseBandhub):
         # take magnitude of combined stems and scale
         X_complex = torch.zeros_like(X).copy_(X)
         X = self._stft_mag(X)
-
         # stack targets and add metadata for collate function
         y_all_complex = torch.stack(y_all_complex)
+
+        if X.dim() == 2:
+            X_complex = X_complex.unsqueeze(0)
+            X = X.unsqueeze(0)
+            y_all_complex = y_all_complex.unsqueeze(1)
+
         t = torch.tensor([y_all_complex.size(-2)])
         c = torch.tensor(c_all).long()
 

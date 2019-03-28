@@ -12,10 +12,20 @@ class STFTTransformer(object):
 
     """Class to transform audio to complex spectrogram tensor."""
 
-    def __init__(self, n_fft=1024, hop_length=512):
+    def __init__(self, n_fft=1024, hop_length=512, mono=True, sr=22050):
         """Initialize transformer."""
         self.n_fft = n_fft
         self.hop_length = hop_length
+        self.mono = mono
+        self.sr = sr
+
+    @staticmethod
+    def librosa_to_tensor(stft):
+        """Convert a librosa complex stft to a pytorch tensor."""
+        real = np.real(stft)
+        imag = np.imag(stft)
+        stft = np.stack([real, imag], axis=2)
+        return torch.from_numpy(stft)
 
     def transform(self, meta_file, save_dir, overwrite=False,
                   groups=4, group=0, out_q=None):
@@ -52,13 +62,22 @@ class STFTTransformer(object):
             if not os.path.isfile(f) or overwrite:
 
                 try:
-                    audio, _ = librosa.load(file, sr=22050)
-                    stft = librosa.core.stft(
-                        y=audio, n_fft=self.n_fft, hop_length=self.hop_length)
-                    real = np.real(stft)
-                    imag = np.imag(stft)
-                    stft = np.stack([real, imag], axis=2)
-                    stft = torch.from_numpy(stft)
+                    audio, _ = librosa.load(file, sr=self.sr, mono=self.mono)
+                    if self.mono:
+                        stft = librosa.core.stft(
+                            y=audio, n_fft=self.n_fft,
+                            hop_length=self.hop_length)
+                        stft = self.librosa_to_tensor(stft)
+                    else:
+                        stft0 = librosa.core.stft(
+                            y=audio[0, :], n_fft=self.n_fft,
+                            hop_length=self.hop_length)
+                        stft1 = librosa.core.stft(
+                            y=audio[1, :], n_fft=self.n_fft,
+                            hop_length=self.hop_length)
+                        stft0 = self.librosa_to_tensor(stft0)
+                        stft1 = self.librosa_to_tensor(stft1)
+                        stft = torch.stack([stft0, stft1])
                     torch.save(stft, f)
                     print("Saving to {}".format(f), flush=True)
                 except:
