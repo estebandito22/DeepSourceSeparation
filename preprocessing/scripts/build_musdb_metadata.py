@@ -12,21 +12,20 @@ mus = musdb.DB(root_dir='/Users/stephencarrow/Documents/DS-GA 3001 Signal Proces
 train_tracks = mus.load_mus_tracks('train')
 data = defaultdict(list)
 for i, track in enumerate(train_tracks):
-    if i < 20:
-        stems = track.sources
-        path_list = track.path.split('.')
-        songId = str(uuid.uuid4())
-        for key in stems.keys():
-            write_path = copy.copy(path_list)
-            write_path = [write_path[0]] + [key] + ['wav']
-            write_path = '.'.join(write_path)
-            librosa.output.write_wav(write_path, stems[key].audio, track.rate)
-            # build metadata
-            data['file_path'] += [write_path]
-            data['trackId'] += [str(uuid.uuid4())]
-            data['songId'] += [songId]
-            data['instrument'] += [key]
-            data['trackVolume'] += [stems[key].gain]
+    stems = track.sources
+    path_list = track.path.split('.')
+    songId = str(uuid.uuid4())
+    for key in stems.keys():
+        write_path = copy.copy(path_list)
+        write_path = [write_path[0]] + [key] + ['wav']
+        write_path = '.'.join(write_path)
+        librosa.output.write_wav(write_path, stems[key].audio, track.rate)
+        # build metadata
+        data['file_path'] += [write_path]
+        data['trackId'] += [str(uuid.uuid4())]
+        data['songId'] += [songId]
+        data['instrument'] += [key]
+        data['trackVolume'] += [stems[key].gain]
 
 df = pd.DataFrame(data)
 # df.to_csv('/scratch/swc419/DeepSourceSeparation/metadata/musdb18_train.csv')
