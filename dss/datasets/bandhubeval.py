@@ -137,6 +137,7 @@ class BandhubEvalset(BandhubPredset):
 
         t = torch.tensor([y_all_complex.size(-2)])
         c = torch.tensor(c_all).long()
+        track_idx = torch.tensor(track_idx)
 
         return {'X': X, 'X_complex': X_complex, 'y_complex': y_all_complex,
-                'c': c, 'ns': ns, 't': t}
+                'c': c, 'ns': ns, 't': t, 'track_idx': track_idx}

@@ -28,6 +28,8 @@ if __name__ == '__main__':
     ap = ArgumentParser()
     ap.add_argument("-sl", "--n_shared_layers", type=int, default=3,
                     help="Number of shared layers in UNet.")
+    ap.add_argument("-of", "--offset", type=int, default=0,
+                    help="Number of shared layers offset for full band.")
     ap.add_argument("-ic", "--in_channels", type=int, default=1,
                     help="Input channels to UNet.")
     ap.add_argument("-ks", "--kernel_size", type=int, default=3,
@@ -40,11 +42,21 @@ if __name__ == '__main__':
                     help="Normalize predicted masks.")
     ap.add_argument("-us", "--upper_bound_slope", type=float, default=1/100,
                     help="Slope of the upper bound curriculum.")
+    ap.add_argument("-uv", "--uniform_volumes", action='store_true',
+                    help="Use random uniform volume data augmentation.")
+    ap.add_argument("-im", "--instrument_mask", type=float, default=0.0,
+                    help="Instrument mask rate.")
+    ap.add_argument("-msc", "--mask_curriculum", type=float, default=0.0,
+                    help="Epoch to reach instrument mask level.")
+    ap.add_argument("-gs", "--gain_slope", type=float, default=0.0,
+                    help="Gain modulation slope.")
+    ap.add_argument("-if", "--interference", type=float, default=0.1,
+                    help="Add random signal interference.")
     ap.add_argument("-ls", "--lower_bound_slope", type=float, default=1/400,
                     help="Slope of the lower bound curriculum.")
     ap.add_argument("-mf", "--mag_func", default='sqrt',
                     help="Function to use on spectrograms, 'sqrt' or 'log'.")
-    ap.add_argument("-nf", "--n_frames", type=int, default=513,
+    ap.add_argument("-nf", "--n_frames", type=int, default=512,
                     help="Number of samples to use in the time domain.")
     ap.add_argument("-th", "--threshold", type=float,
                     help="Threshold below which volume alphas are set to 0.0.")
@@ -58,6 +70,8 @@ if __name__ == '__main__':
                     help="Number of epochs for optimization.")
     ap.add_argument("-ob", "--objective", default='L1',
                     help="Objective function to use, 'L1' or 'L2'.")
+    ap.add_argument("-rg", "--regression", action='store_true',
+                    help="Perform regression instead of masking.")
     ap.add_argument("-mp", "--metadata_path",
                     help="Location of metadata for training.")
     ap.add_argument("-sd", "--save_dir",
@@ -82,6 +96,10 @@ if __name__ == '__main__':
 
     df = pd.read_csv(args['metadata_path'])
 
+    if args['save_dir'].find('medley') > -1:
+        df = df[df['instrument'].isin([0, 1, 2, 3, 4, 6, 5, 7, 8, 9])]
+        df['instrument'] = df['instrument'].astype('category').cat.codes
+
     classes = df['instrument'].unique()
 
     train_datasets = BandhubDataset(
@@ -89,7 +107,12 @@ if __name__ == '__main__':
         upper_bound_slope=args['upper_bound_slope'],
         lower_bound_slope=args['lower_bound_slope'],
         threshold=args['threshold'],
-        chan_swap=args['chan_swap'])
+        chan_swap=args['chan_swap'],
+        uniform_volumes=args['uniform_volumes'],
+        interference=args['interference'],
+        instrument_mask=args['instrument_mask'],
+        gain_slope=args['gain_slope'],
+        mask_curriculum=args['mask_curriculum'])
 
     val_datasets = BandhubDataset(
         df, 'val', mag_func=args['mag_func'], n_frames=args['n_frames'],
@@ -127,7 +150,9 @@ if __name__ == '__main__':
                             objective=args['objective'],
                             eval_version=args['eval_version'],
                             train_class=args['train_class'],
-                            n_fft=args['n_fft'])
+                            n_fft=args['n_fft'],
+                            regression=args['regression'],
+                            offset=args['offset'])
 
     if args['continue_path'] and args['continue_epoch']:
         dnet.load(args['continue_path'], args['continue_epoch'])

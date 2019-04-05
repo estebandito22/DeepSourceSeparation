@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
+from torch.distributions.uniform import Uniform
 from dss.datasets.base.basebandhub import BaseBandhub
 from scipy.stats import uniform
 
@@ -16,7 +17,8 @@ class BandhubDataset(BaseBandhub):
     def __init__(self, metadata, split='train', concentration=1.,
                  mag_func='sqrt', n_frames=513, upper_bound_slope=60,
                  lower_bound_slope=30, threshold=None, chan_swap=0,
-                 random_seed=None):
+                 uniform_volumes=False, interference=0.0, instrument_mask=0.0,
+                 gain_slope=0.0, mask_curriculum=0, random_seed=None):
         """
         Initialize BandhubDataset.
 
@@ -39,15 +41,27 @@ class BandhubDataset(BaseBandhub):
         self.lower_bound_slope = lower_bound_slope
         self.threshold = threshold
         self.chan_swap = chan_swap
+        self.uniform_volumes = uniform_volumes
+        self.interference = interference
+        self.instrument_mask = instrument_mask
+        self.mask_prob = None
+        self.mask_curriculum = mask_curriculum
         self.random_seed = random_seed
+        self.gain_slope = gain_slope
         self.related_tracks_idxs = None
         self.n_classes = self.metadata['instrument'].nunique()
+
+        if not self.mask_curriculum:
+            self.mask_prob = self.instrument_mask
 
         # split data first based on songId
         self._train_test_split()
         self._build_related_tracks()
 
     def _sample_volume_alphas(self, n_related):
+        if self.uniform_volumes:
+            u = Uniform(0.25, 1.25)
+            return u.sample().repeat(n_related)
         if isinstance(self.concentration, (float, int)):
             concentration = self.concentration
         else:
@@ -57,6 +71,12 @@ class BandhubDataset(BaseBandhub):
         if self.random_seed is not None:
             torch.manual_seed(self.random_seed)
         return dirichlet.sample() * float(self.n_classes)
+
+    def _sample_instrument_mask(self, n_related):
+        u = np.random.uniform(size=n_related - 1) <= self.mask_prob
+        m = np.random.permutation(
+            np.concatenate([np.array([1.0]), u.astype(float)]))
+        return torch.from_numpy(m.astype(float)).float()
 
     # def set_concentration(self, t):
     #     """Set the concentration parametr for Dirichlet draws."""
@@ -76,12 +96,50 @@ class BandhubDataset(BaseBandhub):
         lower_bound = np.power(1.5, t * self.lower_bound_slope/1000 - 5) - (np.power(1.5, -5) - 0.01)
         self.concentration = uniform(lower_bound, upper_bound - lower_bound)
 
+    def set_instrument_mask(self, t):
+        """Set the instrument mask."""
+        self.mask_prob = min(
+            (self.instrument_mask - 0.05)/self.mask_curriculum * t + 0.05,
+            self.instrument_mask)
+
     def _chan_swap(self, stft):
         first_chan = int(np.random.uniform() < 1 - self.chan_swap)
         second_chan = 1 - first_chan
         stft = torch.index_select(
             stft, 0, torch.tensor([first_chan, second_chan]))
         return stft
+
+    def _add_interfere(self, X, volume_alphas, seed):
+        if np.random.uniform() <= self.interference:
+            rand_idx = np.random.randint(0, len(self.related_track_idxs))
+            rand_related_track_idxs = self.related_track_idxs.iat[rand_idx]
+            rand_related_track_idx = np.random.choice(rand_related_track_idxs)
+            rand_related_stft_path = self.metadata.\
+                at[rand_related_track_idx, 'stft_path']
+            rand_volume_alpha = np.random.choice(volume_alphas)
+            rand_related_stft = self._load(
+                rand_related_stft_path, rand_volume_alpha, seed)
+            return X.add_(rand_related_stft)
+        return X
+
+    def _make_mod_func(self, slope_bound, intercept_bound):
+        slope = np.random.uniform(-slope_bound, slope_bound)
+        intercept = np.random.uniform(-intercept_bound, intercept_bound)
+        line1 = torch.from_numpy(
+            slope * np.arange(0, self.n_frames) + intercept).float()
+        return torch.sigmoid(line1)
+
+    def _gain_modulation(self, stft):
+        s_bound = self.gain_slope
+        i_bound = self.n_frames / 2 * self.gain_slope
+
+        func1 = self._make_mod_func(s_bound, i_bound)
+        func2 = self._make_mod_func(s_bound, i_bound)
+
+        func = torch.max(func1, func2)
+        func = func.view(1, 1, self.n_frames, 1)
+
+        return stft * func
 
     def __len__(self):
         """Return length of the dataset."""
@@ -97,6 +155,8 @@ class BandhubDataset(BaseBandhub):
         volume_alphas = self._sample_volume_alphas(n_related)
         if self.threshold:
             volume_alphas = F.threshold(volume_alphas, self.threshold, 0.0)
+        if self.instrument_mask:
+            volume_alphas *= self._sample_instrument_mask(n_related)
 
         # set random seed for all sampling
         seed = np.random.randint(0, 1000)
@@ -109,6 +169,8 @@ class BandhubDataset(BaseBandhub):
             tmp = self._load(stft_path, volume_alphas[j], seed)
             if self.chan_swap:
                 tmp = self._chan_swap(tmp)
+            if self.gain_slope:
+                tmp = self._gain_modulation(tmp)
 
             # initialize input tensor and add
             if j == 0:
@@ -122,6 +184,9 @@ class BandhubDataset(BaseBandhub):
             if j == 0:
                 y_all = [torch.zeros_like(tmp) for _ in range(self.n_classes)]
             y_all[instrument].add_(tmp)
+
+        # add random interference
+        X = self._add_interfere(X, volume_alphas, seed)
 
         # take magnitude of combined stems and scale
         X = self._stft_mag(X)

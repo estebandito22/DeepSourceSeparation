@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
 
 from dss.trainers.trainer import Trainer
-from dss.utils.utils import mwf
+# from dss.utils.utils import mwf
 
 
 class SourceSeparator(Trainer):
@@ -59,7 +59,7 @@ class SourceSeparator(Trainer):
             rate = np.inf
 
         # list of batches
-        preds, ys, cs, ts, _ = self.predict(loader)
+        preds, ys, cs, ts, _, _ = self.predict(loader)
 
         # for each batch
         for b_preds, b_ys, b_cs, b_ts in tqdm(list(zip(preds, ys, cs, ts))):
@@ -112,14 +112,31 @@ class SourceSeparator(Trainer):
                             class_sir[cl] += [m2]
                             class_sar[cl] += [m3]
 
-        for k, v in class_sdr.items():
-            class_sdr[k] = np.round(np.mean(v), 2)
-        for k, v in class_sir.items():
-            class_sir[k] = np.round(np.mean(v), 2)
-        for k, v in class_sar.items():
-            class_sar[k] = np.round(np.mean(v), 2)
+        class_sdr_out = defaultdict(list)
+        class_sir_out = defaultdict(list)
+        class_sar_out = defaultdict(list)
 
-        return class_sdr, class_sir, class_sar
+        class_sdr_out['median'] = {k: np.round(np.median(v), 2)
+                                   for k, v in class_sdr.items()}
+        class_sdr_out['mean'] = {k: np.round(np.mean(v), 2)
+                                 for k, v in class_sdr.items()}
+        class_sir_out['median'] = {k: np.round(np.median(v), 2)
+                                   for k, v in class_sir.items()}
+        class_sir_out['mean'] = {k: np.round(np.mean(v), 2)
+                                 for k, v in class_sir.items()}
+        class_sar_out['median'] = {k: np.round(np.median(v), 2)
+                                   for k, v in class_sar.items()}
+        class_sar_out['mean'] = {k: np.round(np.mean(v), 2)
+                                 for k, v in class_sar.items()}
+
+        # for k, v in class_sdr.items():
+        #     class_sdr_out[k] = np.round(np.median(v), 2)
+        # for k, v in class_sir.items():
+        #     class_sir[k] = np.round(np.median(v), 2)
+        # for k, v in class_sar.items():
+        #     class_sar[k] = np.round(np.median(v), 2)
+
+        return class_sdr_out, class_sir_out, class_sar_out
 
     def predict(self, loader):
         """
@@ -180,12 +197,15 @@ class SourceSeparator(Trainer):
         print(''.join(text), flush=True)
 
     def _apply_loss_weights(self, x, y):
-        y_norms = torch.norm(y, dim=(3, 4)).mean(dim=0)
-        y_alphas = (y_norms[0] / y_norms) / torch.sum(y_norms[0] / y_norms)
-        if not y_alphas.sum() < float('inf'):
-            y_alphas = torch.ones((1, self.n_classes)).div_(self.n_classes)
-            if self.USE_CUDA:
-                y_alphas = y_alphas.cuda()
+        # y_norms = torch.norm(y, dim=(3, 4)).mean(dim=2).mean(dim=0)
+        # y_alphas = (y_norms[0] / y_norms) / torch.sum(y_norms[0] / y_norms)
+        # if not y_alphas.sum() < float('inf'):
+        #     y_alphas = torch.ones((1, self.n_classes)).div_(self.n_classes)
+        #     if self.USE_CUDA:
+        #         y_alphas = y_alphas.cuda()
+        y_alphas = torch.tensor([[0.232, 0.262, 0.209, 0.297]])
+        if self.USE_CUDA:
+            y_alphas = y_alphas.cuda()
         res = (x.transpose_(1, 0).contiguous().view(4, -1).mean(dim=1)
                * y_alphas.squeeze())
         return res.sum()

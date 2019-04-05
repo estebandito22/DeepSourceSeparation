@@ -39,9 +39,8 @@ class MHMMDenseNetLSTMModel(nn.Module):
         layer1 = nn.Sequential(
             nn.BatchNorm2d(in_channels),
             nn.Conv2d(
-                in_channels=in_channels, out_channels=32,
-                kernel_size=(self.kernel_size, self.kernel_size + 1),
-                padding=self.kernel_size // 2),
+                in_channels=in_channels, out_channels=32, kernel_size=3,
+                padding=1),
             # 1 x 384 x 128
             DenseBlock(
                 in_channels=32, out_channels=14, kernel_size=self.kernel_size,
@@ -128,9 +127,8 @@ class MHMMDenseNetLSTMModel(nn.Module):
         layer1 = nn.Sequential(
             nn.BatchNorm2d(in_channels),
             nn.Conv2d(
-                in_channels=in_channels, out_channels=32,
-                kernel_size=self.kernel_size + 1,
-                padding=self.kernel_size // 2),
+                in_channels=in_channels, out_channels=32, kernel_size=(4, 3),
+                padding=1),
             # 1 x 640 x 128
             DenseBlock(
                 in_channels=32, out_channels=4, kernel_size=self.kernel_size,
@@ -218,9 +216,8 @@ class MHMMDenseNetLSTMModel(nn.Module):
         layer1 = nn.Sequential(
             nn.BatchNorm2d(in_channels),
             nn.Conv2d(
-                in_channels=in_channels, out_channels=32,
-                kernel_size=(self.kernel_size, self.kernel_size + 1),
-                padding=self.kernel_size // 2),
+                in_channels=in_channels, out_channels=32, kernel_size=3,
+                padding=1),
             # 1 x 1024 x 128
             DenseBlock(
                 in_channels=32, out_channels=2, kernel_size=self.kernel_size,
@@ -292,9 +289,8 @@ class MHMMDenseNetLSTMModel(nn.Module):
         layer1 = nn.Sequential(
             nn.BatchNorm2d(in_channels),
             nn.Conv2d(
-                in_channels=in_channels, out_channels=32,
-                kernel_size=self.kernel_size + 1,
-                padding=self.kernel_size // 2),
+                in_channels=in_channels, out_channels=32, kernel_size=(4, 3),
+                padding=1),
             # 1 x 2048 x 128
             DenseBlock(
                 in_channels=32, out_channels=7, kernel_size=self.kernel_size,
@@ -395,10 +391,10 @@ class MHMMDenseNetLSTMModel(nn.Module):
         # 21 x 2048 x 128
         final_layer = nn.Sequential(
             DenseBlock(
-                in_channels=21, out_channels=4, kernel_size=self.kernel_size,
-                nlayers=2),
+                in_channels=21, out_channels=12, kernel_size=self.kernel_size,
+                nlayers=3),
             nn.Conv2d(
-                in_channels=4, out_channels=self.in_channels, kernel_size=2,
+                in_channels=12, out_channels=self.in_channels, kernel_size=2,
                 padding=1))
 
         self.class_final_layers = nn.ModuleList(

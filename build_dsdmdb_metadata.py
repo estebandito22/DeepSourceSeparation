@@ -153,7 +153,8 @@ df['file_path'] = df['file_path'].apply(
         '/scratch/swc419/'))
 df['instrument_name'] = df['instrument']
 df['instrument'] = df['instrument'].astype('category').cat.codes
-df = df[['file_path', 'songId', 'trackId', 'instrument', 'instrument_name','trackVolume']]
-df.to_csv('metadata/ds100MBD.csv', index=False)
+# df = df[['file_path', 'songId', 'trackId', 'instrument', 'instrument_name','trackVolume']]
+df = df[['file_path', 'songId', 'trackId', 'instrument', 'trackVolume']]
+df.to_csv('metadata/ds100.csv', index=False)
 
-df[['instrument', 'instrument_name']].drop_duplicates()
+# df[['instrument', 'instrument_name']].drop_duplicates()

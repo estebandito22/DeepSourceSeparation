@@ -48,14 +48,15 @@ if __name__ == '__main__':
 
     df = pd.read_csv(args['metadata_path'])
 
-    evalset = BandhubEvalset(df, args['split'], random_seed=0)
+    dnet = MHMMDenseNetLSTM()
+    dnet.load(args['model_dir'], args['epoch'])
+
+    evalset = BandhubEvalset(
+        df, args['split'], n_frames=dnet.n_frames, random_seed=0)
 
     eval_loader = DataLoader(
         evalset, batch_size=2, shuffle=False,
         num_workers=8, collate_fn=evalset.collate_func)
-
-    dnet = MHMMDenseNetLSTM()
-    dnet.load(args['model_dir'], args['epoch'])
 
     sdr, sir, sar = dnet.score(eval_loader, framewise=True)
     print("SDR", sdr)

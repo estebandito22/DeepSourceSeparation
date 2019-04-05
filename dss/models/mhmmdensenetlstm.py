@@ -17,7 +17,7 @@ class MHMMDenseNetLSTMModel(nn.Module):
 
     def __init__(self, n_classes=1, n_shared_layers=3, in_channels=1,
                  kernel_size=3, hidden_size=128, batch_size=64,
-                 normalize_masks=False):
+                 normalize_masks=False, regression=False, offset=0):
         """Initialize MhMMDenseNetLSTMModel."""
         self.n_classes = n_classes
         self.n_shared_layers = n_shared_layers
