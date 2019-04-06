@@ -45,19 +45,16 @@ def get_preds_recons(model, loader):
     preds, ys, cs, ts, ms = model.predict(loader)
 
     # # only perform framewise evaluation at testing time
-    # if self.n_fft == 1025:
-    #     rate = 22050
-    #     hop = 512
-    #     win = 2048
-    # elif self.n_fft == 2049:
-    #     rate = 44100
-    #     hop = 1024
-    #     win = 4096
-    # if not framewise:
-    #     rate = np.inf
-
-    hop = 512
-    win = 2048
+    if model.n_fft == 1025:
+        rate = 22050
+        hop = 512
+        win = 2048
+    elif model.n_fft == 2049:
+        rate = 44100
+        hop = 1024
+        win = 4096
+    if not framewise:
+        rate = np.inf
 
     # for each batch
     for b_preds, b_ys, b_cs, b_ts, b_ms in tqdm(

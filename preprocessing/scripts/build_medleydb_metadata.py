@@ -4,10 +4,12 @@ import librosa
 import os
 import glob
 import uuid
+import json
 from collections import defaultdict
 
 import medleydb as mdb
 
+# get stem info
 data = defaultdict(list)
 mtrack_generator = mdb.load_all_multitracks()
 common_path = '/scratch/swc419/DeepSourceSeparation/data/V1/'
@@ -26,19 +28,36 @@ for mtrack in mtrack_generator:
         data['instrument'].append(instrument)
         data['trackVolume'].append(volume)
 
+# init df and combine instruments
 df = pd.DataFrame(data)
 df['file_path'] = df['file_path'].apply(
     lambda x: x.replace(
         '/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/',
         '/scratch/swc419/'))
-df['instrument_name'] = df['instrument']
-top_instruments
+
+df['instrument'] = df['instrument'].apply(lambda x: 'electric guitar' if x.find('electric guitar') > -1 else x)
 top_instruments = df['instrument'].value_counts().to_frame().query("instrument > 30").index.values
+top_instruments = top_instruments.tolist()
+top_instruments.remove('synthesizer')
+
 df['instrument'] = df['instrument'].apply(lambda x: x if x in top_instruments else 'other')
 df['instrument'] = df['instrument'].astype('category').cat.codes
 # df = df[['file_path', 'songId', 'trackId', 'instrument', 'instrument_name','trackVolume']]
 df = df[['file_path', 'songId', 'trackId', 'instrument', 'trackVolume']]
+
+# splits
+with open('preprocessing/resources/index_simple_train00.json', 'r') as f:
+    train_songs = json.load(f)
+with open('preprocessing/resources/index_simple_validate00.json', 'r') as f:
+    val_songs = json.load(f)
+with open('preprocessing/resources/index_simple_test00.json', 'r') as f:
+    test_songs = json.load(f)
+
+df['track_name'] = df['file_path'].apply(lambda x: x.split('V1')[-1].split('/')[1])
+df['split'] = df['track_name'].apply(lambda x: 'train' if x in train_songs['id'] else ('val' if x in val_songs['id'] else 'test'))
+
+# save
 df.to_csv('metadata/medleydbV1.csv', index=False)
 
-df['instrument'].value_counts()
-df[['instrument', 'instrument_name']].drop_duplicates().sort_values('instrument')
+# df['instrument'].value_counts()
+# df[['instrument', 'instrument_name']].drop_duplicates().sort_values('instrument')

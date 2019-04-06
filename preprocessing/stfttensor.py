@@ -36,12 +36,16 @@ class STFTTransformer(object):
         song_ids = []
         instruments = []
         volumes = []
+        splits = []
         metadata = pd.read_csv(meta_file)
         files = metadata['file_path']
         trackId = metadata['trackId']
         songId = metadata['songId']
         instrument = metadata['instrument']
         volume = metadata['trackVolume']
+        if 'split' not in metadata.columns:
+            metadata['split'] = None
+        split = metadata['split']
 
         k = int(np.ceil(len(files) / groups))
         start = k * group
@@ -51,11 +55,12 @@ class STFTTransformer(object):
         songId = songId[start:end]
         instrument = instrument[start:end]
         volume = volume[start:end]
+        split = split[start:end]
 
         print("save dir: {}".format(save_dir), flush=True)
 
-        for element in zip(files, trackId, songId, instrument, volume):
-            file, track_id, song_id, inst, vol = element
+        for element in zip(files, trackId, songId, instrument, volume, split):
+            file, track_id, song_id, inst, vol, splt = element
             url_id = file.split("/")[-1].split(".")[0]
             f = os.path.join(save_dir, track_id + "_stft.txt")
 
@@ -91,8 +96,10 @@ class STFTTransformer(object):
                 song_ids += [song_id]
                 instruments += [inst]
                 volumes += [vol]
+                splits += [splt]
 
         return_dict = {'stft_path': stft_paths, 'trackId': track_ids,
                        'songId': song_ids, 'instrument': instruments,
-                       'trackVolume': volumes, 'urlId': url_ids}
+                       'trackVolume': volumes, 'urlId': url_ids,
+                       'split': splits}
         out_q.put(return_dict)

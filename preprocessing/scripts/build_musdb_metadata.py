@@ -52,3 +52,35 @@ for track in val_tracks:
 df = pd.DataFrame(data)
 # df.to_csv('/scratch/swc419/DeepSourceSeparation/metadata/musdb18_test.csv')
 df.to_csv('/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/DeepSourceSeparation/metadata/musdb18_test.csv')
+
+
+# train = pd.read_csv('metadata/musdb18_train_STFT_stereo.csv')
+# test = pd.read_csv('metadata/musdb18_test_STFT_stereo.csv')
+#
+#
+# train['instrument'] = train['instrument'].astype('category').cat.codes
+# test['instrument'] = test['instrument'].astype('category').cat.codes
+#
+# train['split'] = 'train'
+# test['split'] = 'test'
+#
+# all = pd.concat([train, test])
+#
+# all.shape
+#
+# all.to_csv('metadata/musdb18_STFT_stereo.csv')
+#
+# train_names = pd.read_csv('metadata/musdb18_train.csv')
+# test_names = pd.read_csv('metadata/musdb18_test.csv')
+#
+#
+# train_names['track_name'] = train_names.apply(lambda x: x['file_path'].split('.'+x['instrument']+'.')[0].split('/')[-1], axis=1)
+# test_names['track_name'] = test_names.apply(lambda x: x['file_path'].split('.'+x['instrument']+'.')[0].split('/')[-1], axis=1)
+#
+#
+# all_names = pd.concat([train_names, test_names])
+# all_names.head()
+#
+# all['urlId'] =  all_names['track_name']
+#
+# all.to_csv('metadata/musdb18_STFT_stereo.csv')

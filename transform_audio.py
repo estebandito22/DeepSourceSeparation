@@ -57,7 +57,8 @@ if __name__ == '__main__':
         processes.append(p)
 
     resultdict = {'stft_path': [], 'trackId': [], 'songId': [],
-                  'instrument': [], 'trackVolume': [], 'urlId': []}
+                  'instrument': [], 'trackVolume': [], 'urlId': [],
+                  'split': []}
     for i in range(r):
         q_dict = o_q.get()
         resultdict['stft_path'] += q_dict['stft_path']
@@ -66,6 +67,7 @@ if __name__ == '__main__':
         resultdict['instrument'] += q_dict['instrument']
         resultdict['trackVolume'] += q_dict['trackVolume']
         resultdict['urlId'] += q_dict['urlId']
+        resultdict['split'] += q_dict['split']
 
     for p in processes:
         p.join()
