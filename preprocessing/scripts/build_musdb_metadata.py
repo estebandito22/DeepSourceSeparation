@@ -6,8 +6,8 @@ from collections import defaultdict
 
 import pandas as pd
 
-mus = musdb.DB(root_dir='/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/DeepSourceSeparation/data/musdb18')
-# mus = musdb.DB(root_dir='/scratch/swc419/DeepSourceSeparation/data/musdb18')
+# mus = musdb.DB(root_dir='/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/DeepSourceSeparation/data/musdb18')
+mus = musdb.DB(root_dir='/scratch/swc419/DeepSourceSeparation/data/musdb18')
 
 train_tracks = mus.load_mus_tracks('train')
 data = defaultdict(list)
@@ -28,8 +28,9 @@ for i, track in enumerate(train_tracks):
         data['trackVolume'] += [stems[key].gain]
 
 df = pd.DataFrame(data)
+df['split'] = 'train'
 # df.to_csv('/scratch/swc419/DeepSourceSeparation/metadata/musdb18_train.csv')
-df.to_csv('/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/DeepSourceSeparation/metadata/musdb18_train.csv')
+# df.to_csv('/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/DeepSourceSeparation/metadata/musdb18_train.csv')
 
 val_tracks = mus.load_mus_tracks('test')
 data = defaultdict(list)
@@ -49,9 +50,17 @@ for track in val_tracks:
         data['instrument'] += [key]
         data['trackVolume'] += [stems[key].gain]
 
-df = pd.DataFrame(data)
+df2 = pd.DataFrame(data)
+df2['split'] = 'test'
+
+musdb18 = pd.concat([df, df2])
+musdb18['instrument'] = musdb18['instrument'].astype('category').cat.codes
+
+musdb18.to_csv('/scratch/swc419/DeepSourceSeparation/metadata/musdb18.csv')
+
+
 # df.to_csv('/scratch/swc419/DeepSourceSeparation/metadata/musdb18_test.csv')
-df.to_csv('/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/DeepSourceSeparation/metadata/musdb18_test.csv')
+# df.to_csv('/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/DeepSourceSeparation/metadata/musdb18_test.csv')
 
 
 # train = pd.read_csv('metadata/musdb18_train_STFT_stereo.csv')
