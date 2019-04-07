@@ -2,16 +2,19 @@ import musdb
 import librosa
 import copy
 import uuid
+from tqdm import tqdm
 from collections import defaultdict
 
 import pandas as pd
 
+print("Loading MusDB...")
 # mus = musdb.DB(root_dir='/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/DeepSourceSeparation/data/musdb18')
 mus = musdb.DB(root_dir='/scratch/swc419/DeepSourceSeparation/data/musdb18')
 
+print("Starting Train...")
 train_tracks = mus.load_mus_tracks('train')
 data = defaultdict(list)
-for i, track in enumerate(train_tracks):
+for i, track in tqdm(enumerate(train_tracks)):
     stems = track.sources
     path_list = track.path.split('.')
     songId = str(uuid.uuid4())
@@ -32,9 +35,10 @@ df['split'] = 'train'
 # df.to_csv('/scratch/swc419/DeepSourceSeparation/metadata/musdb18_train.csv')
 # df.to_csv('/Users/stephencarrow/Documents/DS-GA 3001 Signal Processing and Deep Learning for Audio/DeepSourceSeparation/metadata/musdb18_train.csv')
 
+print("Starting Test...")
 val_tracks = mus.load_mus_tracks('test')
 data = defaultdict(list)
-for track in val_tracks:
+for track in tqdm(val_tracks):
     stems = track.sources
     path_list = track.path.split('.stem.')
     songId = str(uuid.uuid4())
@@ -53,9 +57,11 @@ for track in val_tracks:
 df2 = pd.DataFrame(data)
 df2['split'] = 'test'
 
+print("Combining Datasets...")
 musdb18 = pd.concat([df, df2])
 musdb18['instrument'] = musdb18['instrument'].astype('category').cat.codes
 
+print("Printing Datasets...")
 musdb18.to_csv('/scratch/swc419/DeepSourceSeparation/metadata/musdb18.csv')
 
 
