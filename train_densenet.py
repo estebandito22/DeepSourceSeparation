@@ -6,7 +6,7 @@ import torch
 
 from dss.datasets.bandhubsimple import BandhubDataset
 from dss.datasets.bandhubpred import BandhubPredset
-# from dss.datasets.bandhubeval import BandhubEvalset
+from dss.datasets.bandhubeval import BandhubEvalset
 from dss.trainers.mhmmdensenetlstm import MHMMDenseNetLSTM
 
 
@@ -36,6 +36,10 @@ if __name__ == '__main__':
                     help="Kernel size for convolutional layers.")
     ap.add_argument("-hs", "--hidden_size", type=int, default=512,
                     help="Hidden size for LSTM.")
+    ap.add_argument("-rf", "--repf", type=int, nargs='+', default='14 4 7 12',
+                    help="K replication factors for each band and output.")
+    ap.add_argument("-do", "--dropout", type=float, default=0.0,
+                    help="Dropout rate.")
     ap.add_argument("-la", "--loss_alphas", action='store_true',
                     help="Use loss alphas.")
     ap.add_argument("-nm", "--normalize_masks", action='store_true',
@@ -126,6 +130,10 @@ if __name__ == '__main__':
         df, 'val', mag_func=args['mag_func'], n_frames=args['n_frames'],
         random_seed=0)
 
+    # val_predset = BandhubEvalset(
+    #     df, 'val', mag_func=args['mag_func'], n_frames=args['n_frames'],
+    #     random_seed=0)
+
     if args['pretrained_path'] is not None:
         with open(args['pretrained_path'], 'rb') as model_dict:
             if torch.cuda.is_available():
@@ -152,7 +160,9 @@ if __name__ == '__main__':
                             train_class=args['train_class'],
                             n_fft=args['n_fft'],
                             regression=args['regression'],
-                            offset=args['offset'])
+                            offset=args['offset'],
+                            k=list(args['repf']),
+                            dropout=args['dropout'])
 
     if args['continue_path'] and args['continue_epoch']:
         dnet.load(args['continue_path'], args['continue_epoch'])

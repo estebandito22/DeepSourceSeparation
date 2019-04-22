@@ -1,6 +1,7 @@
 """Classes to train Deep Source Separation Models."""
 
 import os
+import os.path as op
 from copy import deepcopy
 from collections import defaultdict
 
@@ -8,16 +9,18 @@ import numpy as np
 from tqdm import tqdm
 
 from librosa.core import istft
+from librosa.core import resample
 from mir_eval.separation import bss_eval_sources
 # from museval.metrics import bss_eval
+import musdb
 from museval import evaluate
+from museval import EvalStore
 
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
 
 from dss.trainers.trainer import Trainer
-# from dss.utils.utils import mwf
 
 
 class SourceSeparator(Trainer):
@@ -32,7 +35,7 @@ class SourceSeparator(Trainer):
         """Fit function."""
         raise NotImplementedError("Not yet implemented!")
 
-    def score(self, loader, framewise=False):
+    def score(self, loader, framewise=False, save_dir=None):
         """
         Score the model.
 
@@ -58,16 +61,22 @@ class SourceSeparator(Trainer):
         if not framewise:
             rate = np.inf
 
+        if save_dir:
+            class_map = {0: 'bass', 1: 'drums', 2: 'other', 3: 'vocals'}
+            mus = musdb.DB(root_dir="data/musdb18")
+
         # list of batches
-        preds, ys, cs, ts, _, _ = self.predict(loader)
+        preds, ys, cs, ts, _, nm = self.predict(loader)
 
         # for each batch
-        for b_preds, b_ys, b_cs, b_ts in tqdm(list(zip(preds, ys, cs, ts))):
+        for b_preds, b_ys, b_cs, b_ts, b_nm in tqdm(list(zip(preds, ys, cs, ts, nm))):
             # for each sample
-            for pred, y, c, t in zip(b_preds, b_ys, b_cs, b_ts):
+            for pred, y, c, t, n in zip(b_preds, b_ys, b_cs, b_ts, b_nm):
                 pred_recons = []
                 y_recons = []
                 pred_cs = []
+                pred_recons_dict = defaultdict(list)
+                y_recons_dict = defaultdict(list)
                 # for each class
                 for i, (c_pred, c_y, c_c) in enumerate(zip(pred, y, c)):
                     # if the class exists in the source signal
@@ -88,6 +97,9 @@ class SourceSeparator(Trainer):
                         pred_recons += [pred_recon]
                         y_recons += [y_recon]
                         pred_cs += [i]
+                        if save_dir:
+                            pred_recons_dict[class_map[i]] = pred_recon
+                            y_recons_dict[class_map[i]] = y_recon
                 # possible to sample from targets that are all zeros
                 if pred_recons:
                     pred_recons = np.stack(pred_recons)
@@ -101,12 +113,26 @@ class SourceSeparator(Trainer):
                                 y_recons, pred_recons,
                                 compute_permutation=False)
                         elif self.eval_version == 'v4':
-                            sdr, _, sir, sar = evaluate(
-                                y_recons, pred_recons, win=rate, hop=rate,
-                                padding=False)
-                            sdr = np.nanmean(sdr, axis=1)
-                            sir = np.nanmean(sir, axis=1)
-                            sar = np.nanmean(sar, axis=1)
+                            if save_dir:
+                                name = loader.dataset.metadata.at[
+                                    int(n.cpu().numpy()), 'urlId']
+                                track = mus.load_mus_tracks(
+                                    tracknames=[name])[0]
+                                sdr, isr, sir, sar = evaluate(
+                                    y_recons, pred_recons, win=rate, hop=rate,
+                                    padding=True)
+                                data = self._to_evalstore(
+                                    sdr, sir, isr, sar, rate, rate, class_map)
+                                self._save_framewise(data, save_dir, track)
+                                continue
+                            else:
+                                sdr, isr, sir, sar = evaluate(
+                                    y_recons, pred_recons, win=rate, hop=rate,
+                                    padding=True)
+                                cmb_sdr = np.concatenate([x for x in sdr])
+                                sdr = np.nanmean(sdr, axis=1)
+                                sir = np.nanmean(sir, axis=1)
+                                sar = np.nanmean(sar, axis=1)
                         for m1, m2, m3, cl in zip(sdr, sir, sar, pred_cs):
                             class_sdr[cl] += [m1]
                             class_sir[cl] += [m2]
@@ -129,14 +155,48 @@ class SourceSeparator(Trainer):
         class_sar_out['mean'] = {k: np.round(np.mean(v), 2)
                                  for k, v in class_sar.items()}
 
-        # for k, v in class_sdr.items():
-        #     class_sdr_out[k] = np.round(np.median(v), 2)
-        # for k, v in class_sir.items():
-        #     class_sir[k] = np.round(np.median(v), 2)
-        # for k, v in class_sar.items():
-        #     class_sar[k] = np.round(np.median(v), 2)
+        return class_sdr_out, class_sir_out, class_sar_out, cmb_sdr
 
-        return class_sdr_out, class_sir_out, class_sar_out
+    def _to_evalstore(self, sdr, sir, isr, sar, win, hop, class_map):
+        data = EvalStore(win=win, hop=hop)
+        # iterate over all evaluation results except for vocals
+        for i, target in class_map.items():
+            # if target == 'vocals' and has_acc:
+            #     continue
+
+            values = {
+                "SDR": sdr[i].tolist(),
+                "SIR": sir[i].tolist(),
+                "ISR": isr[i].tolist(),
+                "SAR": sar[i].tolist()
+            }
+
+            data.add_target(
+                target_name=target,
+                values=values
+            )
+        return data
+
+    def _save_framewise(self, data, output_dir, track):
+        # validate against the schema
+        data.validate()
+
+        try:
+            subset_path = op.join(
+                output_dir,
+                track.subset
+            )
+
+            if not op.exists(subset_path):
+                os.makedirs(subset_path)
+
+            with open(
+                op.join(subset_path, track.name) + '.json', 'w+'
+            ) as f:
+                f.write(data.json)
+
+        except (IOError):
+            pass
 
     def predict(self, loader):
         """
@@ -202,10 +262,10 @@ class SourceSeparator(Trainer):
         # if not y_alphas.sum() < float('inf'):
         #     y_alphas = torch.ones((1, self.n_classes)).div_(self.n_classes)
         #     if self.USE_CUDA:
-        #         y_alphas = y_alphas.cuda()
+        #         y_alphas = y_alphas.cuda(self.device)
         y_alphas = torch.tensor([[0.232, 0.262, 0.209, 0.297]])
         if self.USE_CUDA:
-            y_alphas = y_alphas.cuda()
+            y_alphas = y_alphas.cuda(self.device)
         res = (x.transpose_(1, 0).contiguous().view(4, -1).mean(dim=1)
                * y_alphas.squeeze())
         return res.sum()
@@ -256,3 +316,6 @@ class SourceSeparator(Trainer):
         self.USE_CUDA = torch.cuda.is_available()
         self._init_nn()
         self.model.load_state_dict(checkpoint['state_dict'])
+        torch.set_rng_state(self.torch_rng_state)
+        np.random.set_state(self.numpy_rng_state)
+        self.nn_epoch += 1

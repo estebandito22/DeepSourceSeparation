@@ -34,7 +34,7 @@ class BaseBandhub(BaseAudio):
             test_songs = self.metadata[
                 self.metadata['split'] == 'test']['songId'].unique()
 
-            if not val_songs:
+            if len(val_songs) == 0:
 
                 tracks = self.metadata[
                     self.metadata['songId'].isin(

@@ -43,6 +43,9 @@ class BandhubPredset(BaseBandhub):
         self.related_track_instruments = self.metadata.groupby(
             'songId')['instrument'].apply(lambda x: list(x))
 
+    def sample(self, p=0.1):
+        self.related_track_idxs = self.related_track_idxs.sample(frac=p)
+
     def __len__(self):
         """Return length of the dataset."""
         return len(self.related_track_idxs)
@@ -52,7 +55,7 @@ class BandhubPredset(BaseBandhub):
         related_track_idxs = self.related_track_idxs.iat[i]
 
         # set random seed for all sampling
-        seed = np.random.randint(0, 1000)
+        seed = np.random.randint(0, 10000000)
 
         # load STFT of  related stems, sample and add
         for j, track_idx in enumerate(related_track_idxs):

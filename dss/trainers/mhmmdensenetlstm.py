@@ -11,9 +11,11 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from dss.trainers.sourceseparator import SourceSeparator
-from dss.models.mhmmdensenetlstm_new import MHMMDenseNetLSTMModel
+from dss.models.mhmmdensenetlstm import MHMMDenseNetLSTMModel
 from dss.models.mhmmdensenetlstm44 import MHMMDenseNetLSTMModel \
     as MHMMDenseNetLSTMModel44
+
+from dss.utils.utils import wilcoxon
 
 
 class MHMMDenseNetLSTM(SourceSeparator):
@@ -25,7 +27,8 @@ class MHMMDenseNetLSTM(SourceSeparator):
                  normalize_masks=False, batch_size=64, lr=0.001,
                  weight_decay=0, num_epochs=100, objective='L1',
                  eval_version='v3', train_class=-1, n_fft=1025, mwf=0,
-                 regression=False, offset=0):
+                 regression=False, offset=0, k=[14, 4, 7, 12],
+                 dropout=0.0):
         """
         Initialize MHMMDenseNetLSTM model.
 
@@ -69,6 +72,8 @@ class MHMMDenseNetLSTM(SourceSeparator):
         self.mwf = mwf
         self.regression = regression
         self.offset = offset
+        self.k = k
+        self.dropout = dropout
         self.n_frames = None
         self.upper_bound_slope = None
         self.lower_bound_slope = None
@@ -91,8 +96,13 @@ class MHMMDenseNetLSTM(SourceSeparator):
         self.loss_func = None
         self.nn_epoch = 0
         self.best_val_loss = -float('inf')
+        self.cmb_sdr = None
 
         self.USE_CUDA = torch.cuda.is_available()
+
+        # reproducability attributes
+        self.torch_rng_state = None
+        self.numpy_rng_state = None
 
     def _init_nn(self, pretrained_state=None):
         """Initialize the nn model for training."""
@@ -105,7 +115,7 @@ class MHMMDenseNetLSTM(SourceSeparator):
             in_channels=self.in_channels, kernel_size=self.kernel_size,
             hidden_size=self.hidden_size, batch_size=self.batch_size,
             normalize_masks=self.normalize_masks, regression=self.regression,
-            offset=self.offset)
+            offset=self.offset, k=self.k, dropout=self.dropout)
 
         if pretrained_state is not None:
             self._load_pretrained(pretrained_state)
@@ -113,7 +123,11 @@ class MHMMDenseNetLSTM(SourceSeparator):
         self.optimizer = optim.Adam(
             self.model.parameters(), self.lr, weight_decay=self.weight_decay)
 
-        self.plateau_scheduler = ReduceLROnPlateau(self.optimizer, patience=50)
+        self.plateau_scheduler = ReduceLROnPlateau(
+            self.optimizer, patience=50, cooldown=1)
+
+        # self.mslr_scheduler = MultiStepLR(
+        #     self.optimizer, milestones=[200, 250, 300])
 
         if self.loss_alphas or self.train_class != -1:
             reduction = 'none'
@@ -130,11 +144,21 @@ class MHMMDenseNetLSTM(SourceSeparator):
         if self.USE_CUDA:
             self.model = self.model.cuda()
 
+        # reproducability and deteriministic continuation of models
+        np.random.seed(1234)
+        torch.manual_seed(1234)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+        self.torch_rng_state = torch.get_rng_state()
+        self.numpy_rng_state = np.random.get_state()
+
     def _train_epoch(self, loader):
         """Train epoch."""
         self.model.train()
         train_loss = 0
         samples_processed = 0
+        np.random.seed(self.nn_epoch)
 
         for batch_samples in tqdm(loader):
 
@@ -178,6 +202,7 @@ class MHMMDenseNetLSTM(SourceSeparator):
         self.model.eval()
         val_loss = 0
         samples_processed = 0
+        np.random.seed(self.nn_epoch)
 
         with torch.no_grad():
             for batch_samples in tqdm(loader):
@@ -236,6 +261,8 @@ class MHMMDenseNetLSTM(SourceSeparator):
                In Channels: {}\n\
                Kernel Size: {}\n\
                Hidden Size: {}\n\
+               K: {} \n\
+               Dropout: {}\n\
                Loss Alphas: {}\n\
                Normalize Masks: {}\n\
                Eval Version: {}\n\
@@ -260,9 +287,10 @@ class MHMMDenseNetLSTM(SourceSeparator):
                Save Dir: {}".format(
                    self.n_classes, self.n_shared_layers, self.offset,
                    self.in_channels, self.kernel_size, self.hidden_size,
-                   self.loss_alphas, self.normalize_masks, self.eval_version,
-                   train_dataset.mag_func, train_dataset.n_frames,
-                   self.n_fft, train_dataset.upper_bound_slope,
+                   self.k, self.dropout, self.loss_alphas, self.normalize_masks,
+                   self.eval_version, train_dataset.mag_func,
+                   train_dataset.n_frames, self.n_fft,
+                   train_dataset.upper_bound_slope,
                    train_dataset.lower_bound_slope, train_dataset.threshold,
                    train_dataset.chan_swap, train_dataset.uniform_volumes,
                    train_dataset.interference, train_dataset.instrument_mask,
@@ -307,11 +335,20 @@ class MHMMDenseNetLSTM(SourceSeparator):
         train_sdr = None
         train_sir = None
         train_sar = None
-        train_avg_sdr = None
-        train_med_sdr = None
+        train_avg_sdr = 0
+        train_med_sdr = 0
+        val_loss = 0
+        val_sdr = None
+        val_sir = None
+        val_sar = None
+        val_avg_sdr = 0
+        val_med_sdr = 0
+        plateaud = False
+        last_reduced_epoch = 0
+        reduce_count = 0
 
         # train loop
-        while self.nn_epoch < self.num_epochs + 1:
+        while self.nn_epoch < self.num_epochs + 1 and not plateaud:
 
             train_loaders = self._batch_loaders(train_dataset, k=1)
 
@@ -325,12 +362,12 @@ class MHMMDenseNetLSTM(SourceSeparator):
                 if self.nn_epoch > 0:
                     print("\nInitializing train epoch...", flush=True)
                     train_loss = self._train_epoch(train_loader)
-                    # train_sdr, train_sir, train_sar = self.score(
+                    # train_sdr, train_sir, train_sar, _ = self.score(
                     #     train_pred_loader)
 
                 print("\nInitializing val epoch...", flush=True)
                 val_loss = self._eval_epoch(val_loader)
-                val_sdr, val_sir, val_sar = self.score(
+                val_sdr, val_sir, val_sar, val_cmb_sdr = self.score(
                     val_pred_loader, framewise=True)
 
                 # report
@@ -339,10 +376,11 @@ class MHMMDenseNetLSTM(SourceSeparator):
                         np.mean(list(train_sdr['mean'].values())), 5)
                     train_med_sdr = np.round(
                         np.mean(list(train_sdr['median'].values())), 5)
-                val_avg_sdr = np.round(
-                    np.mean(list(val_sdr['mean'].values())), 5)
-                val_med_sdr = np.round(
-                    np.mean(list(val_sdr['median'].values())), 5)
+                if val_sdr is not None:
+                    val_avg_sdr = np.round(
+                        np.mean(list(val_sdr['mean'].values())), 5)
+                    val_med_sdr = np.round(
+                        np.mean(list(val_sdr['median'].values())), 5)
                 self._report(
                     {'L1': np.round(train_loss, 5),
                      'Avg Avg SDR': train_avg_sdr,
@@ -354,11 +392,27 @@ class MHMMDenseNetLSTM(SourceSeparator):
                     val_sdr, val_sir, val_sar)
 
                 self.plateau_scheduler.step(-val_med_sdr)
+                if self.plateau_scheduler.in_cooldown:
+                    print("Reduced Learning Rate")
+                    last_reduced_epoch = self.nn_epoch
+                    reduce_count += 1
 
                 # save best
                 if val_med_sdr > self.best_val_loss:
                     self.best_val_loss = val_med_sdr
+                    self.torch_rng_state = torch.get_rng_state()
+                    self.numpy_rng_state = np.random.get_state()
                     self.save()
+                    print("----------- SAVED CHECKPOINT EPOCH {} -----------".
+                          format(self.nn_epoch))
+                elif reduce_count == 2 and self.nn_epoch - last_reduced_epoch >= 10:
+                    plateaud = True
+                    self.torch_rng_state = torch.get_rng_state()
+                    self.numpy_rng_state = np.random.get_state()
+                    self.save()
+                    print("----------- SAVED CHECKPOINT EPOCH {} -----------".
+                          format(self.nn_epoch))
+                    break
                 self.nn_epoch += 1
 
     def predict(self, loader):
@@ -418,8 +472,8 @@ class MHMMDenseNetLSTM(SourceSeparator):
                     X_complex = X_complex.cuda()
                     y = y.cuda()
 
-                if X.size(0) > 16:
-                    X_list = torch.split(X, 16, dim=0)
+                if X.size(0) > 4:
+                    X_list = torch.split(X, 4, dim=0)
                 else:
                     X_list = [X]
 
@@ -490,8 +544,18 @@ class MHMMDenseNetLSTM(SourceSeparator):
         mask[:, train_class, :, :, :] += 1
         return torch.mean(loss * mask)
 
+    def _check_cmb_sdr(self, cmb_sdr):
+        if self.cmb_sdr is None:
+            self.cmb_sdr = cmb_sdr
+            return 0
+        _, _, return_type, return_val = wilcoxon(self.cmb_sdr, cmb_sdr)
+        if return_type == 'r_plus':
+            return self.best_val_loss
+        self.cmb_sdr = cmb_sdr
+        return self.best_val_loss + 1
+
     def _format_model_subdir(self):
-        subdir = "MHMMDenseLSTM_nc{}sl{}ic{}hs{}lr{}wd{}ob{}pt{}la{}ev{}mf{}nf{}tc{}ks{}us{}ls{}nm{}th{}nfft{}cs{}rg{}uv{}if{}of{}im{}gs{}mc{}".\
+        subdir = "MHMMDenseLSTM_nc{}sl{}ic{}hs{}lr{}wd{}ob{}pt{}la{}ev{}mf{}nf{}tc{}ks{}us{}ls{}nm{}th{}nfft{}cs{}rg{}uv{}if{}of{}im{}gs{}mc{}k{}do{}".\
                 format(self.n_classes, self.n_shared_layers, self.in_channels,
                        self.hidden_size, self.lr, self.weight_decay,
                        self.objective, self.pretrained,
@@ -501,6 +565,7 @@ class MHMMDenseNetLSTM(SourceSeparator):
                        self.normalize_masks, self.threshold, self.n_fft,
                        self.chan_swap, self.regression, self.uniform_volumes,
                        self.interference, self.offset, self.instrument_mask,
-                       self.gain_slope, self.mask_curriculum)
+                       self.gain_slope, self.mask_curriculum, self.k,
+                       self.dropout)
 
         return subdir

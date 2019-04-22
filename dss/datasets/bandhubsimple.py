@@ -78,6 +78,9 @@ class BandhubDataset(BaseBandhub):
             np.concatenate([np.array([1.0]), u.astype(float)]))
         return torch.from_numpy(m.astype(float)).float()
 
+    def sample(self, p=0.1):
+        self.related_track_idxs = self.related_track_idxs.sample(frac=p)
+
     # def set_concentration(self, t):
     #     """Set the concentration parametr for Dirichlet draws."""
     #     upper_bound = 1e-8 + t * self.upper_bound_slope
@@ -159,7 +162,7 @@ class BandhubDataset(BaseBandhub):
             volume_alphas *= self._sample_instrument_mask(n_related)
 
         # set random seed for all sampling
-        seed = np.random.randint(0, 1000)
+        seed = np.random.randint(0, 10000000)
 
         # load STFT of  related stems, sample and add
         for j, track_idx in enumerate(related_track_idxs):

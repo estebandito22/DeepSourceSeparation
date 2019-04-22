@@ -39,12 +39,17 @@ if __name__ == '__main__':
                     help="epoch of pretrained model.")
     ap.add_argument("-sp", "--split",
                     help="Split to evaluate on.")
+    ap.add_argument("-sd", "--save_dir",
+                    help="Save framewise evaluations to directory.")
     args = vars(ap.parse_args())
 
     print("\n\nLoading " + args['metadata_path'] + "\n")
 
     print("Evaluating " + args['model_dir']
-          + " on epoch " + args['epoch'] + "\n")
+          + " on epoch " + args['epoch'] + " for split " + args['split']
+          + "\n\n")
+
+    print("Saving to " + str(args['save_dir']) + "\n\n")
 
     df = pd.read_csv(args['metadata_path'])
 
@@ -58,7 +63,8 @@ if __name__ == '__main__':
         evalset, batch_size=2, shuffle=False,
         num_workers=8, collate_fn=evalset.collate_func)
 
-    sdr, sir, sar = dnet.score(eval_loader, framewise=True)
+    sdr, sir, sar, _ = dnet.score(eval_loader, framewise=True,
+                               save_dir=args['save_dir'])
     print("SDR", sdr)
     print("SIR", sir)
     print("SAR", sar)

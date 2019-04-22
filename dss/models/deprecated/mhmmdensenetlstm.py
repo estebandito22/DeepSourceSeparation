@@ -26,8 +26,6 @@ class MHMMDenseNetLSTMModel(nn.Module):
         self.hidden_size = hidden_size
         self.batch_size = batch_size
         self.normalize_masks = normalize_masks
-        self.regression = regression
-        self.offset = offset
         super(MHMMDenseNetLSTMModel, self).__init__()
 
         assert (self.n_shared_layers <= 10) and (self.n_shared_layers >= 1), \
@@ -37,11 +35,11 @@ class MHMMDenseNetLSTMModel(nn.Module):
         # Convolution Low approx 4.1kHz
         #
 
-        # 1 x 384 x 128
+        # 1 x 384 x 129
         layer1 = nn.Sequential(
             nn.BatchNorm2d(in_channels),
             nn.Conv2d(
-                in_channels=in_channels, out_channels=32, kernel_size=3,
+                in_channels=in_channels, out_channels=32, kernel_size=(3, 4),
                 padding=1),
             # 1 x 384 x 128
             DenseBlock(
@@ -125,11 +123,11 @@ class MHMMDenseNetLSTMModel(nn.Module):
         # Convolution high 11.025kHz
         #
 
-        # 1 x 641 x 128
+        # 1 x 641 x 129
         layer1 = nn.Sequential(
             nn.BatchNorm2d(in_channels),
             nn.Conv2d(
-                in_channels=in_channels, out_channels=32, kernel_size=(4, 3),
+                in_channels=in_channels, out_channels=32, kernel_size=4,
                 padding=1),
             # 1 x 640 x 128
             DenseBlock(
@@ -214,11 +212,11 @@ class MHMMDenseNetLSTMModel(nn.Module):
         # Convolution Full
         #
 
-        # 1 x 1025 x 128
+        # 1 x 1025 x 129
         layer1 = nn.Sequential(
             nn.BatchNorm2d(in_channels),
             nn.Conv2d(
-                in_channels=in_channels, out_channels=32, kernel_size=(4, 3),
+                in_channels=in_channels, out_channels=32, kernel_size=4,
                 padding=1),
             # 1 x 1024 x 128
             DenseBlock(
@@ -296,9 +294,9 @@ class MHMMDenseNetLSTMModel(nn.Module):
 
         n = 5
         shared_conv_layers = nn.ModuleList(
-            all_layers[:min(n, self.n_shared_layers + self.offset)])
+            all_layers[:min(n, self.n_shared_layers)])
         shared_deconv_layers = nn.ModuleList(
-            all_layers[n:max(n, self.n_shared_layers + self.offset)])
+            all_layers[n:max(n, self.n_shared_layers)])
         self.shared_layers_full = nn.ModuleDict(
             {'conv': shared_conv_layers,
              'deconv': shared_deconv_layers})
@@ -306,9 +304,9 @@ class MHMMDenseNetLSTMModel(nn.Module):
         self.class_layers_full = nn.ModuleDict()
         for i in range(self.n_classes):
             class_conv_layers = deepcopy(nn.ModuleList(
-                all_layers[min(n, self.n_shared_layers + self.offset):n]))
+                all_layers[min(n, self.n_shared_layers):n]))
             class_deconv_layers = deepcopy(nn.ModuleList(
-                all_layers[max(n, self.n_shared_layers + self.offset):]))
+                all_layers[max(n, self.n_shared_layers):]))
             self.class_layers_full.update(
                 {'conv{}'.format(i): class_conv_layers,
                  'deconv{}'.format(i): class_deconv_layers})
@@ -320,16 +318,16 @@ class MHMMDenseNetLSTMModel(nn.Module):
         # 21 x 1024 x 128
         final_layer = nn.Sequential(
             DenseBlock(
-                in_channels=21, out_channels=12, kernel_size=self.kernel_size,
-                nlayers=3),
+                in_channels=21, out_channels=4, kernel_size=self.kernel_size,
+                nlayers=2),
             nn.Conv2d(
-                in_channels=12, out_channels=self.in_channels,
-                kernel_size=(2, 1), padding=(1, 0)))
+                in_channels=4, out_channels=self.in_channels, kernel_size=2,
+                padding=1))
 
         self.class_final_layers = nn.ModuleList(
             [deepcopy(final_layer) for _ in range(self.n_classes)])
 
-        # 1 x 1025 x 128
+        # 1 x 1025 x 129
 
     def detach_hidden(self, bs):
         """Detach hidden state of LSTMs."""
@@ -496,10 +494,6 @@ class MHMMDenseNetLSTMModel(nn.Module):
 
         # batch size x n_classes x in_channels x 1025 x n_frames
         out = self._class_final_dense(out_all)
-
-        if self.regression:
-            out = F.relu(out)
-            return out, out
 
         if self.normalize_masks:
             mask = F.softmax(out, dim=1)
