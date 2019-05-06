@@ -57,10 +57,11 @@ if __name__ == '__main__':
     dnet.load(args['model_dir'], args['epoch'])
 
     evalset = BandhubEvalset(
-        df, args['split'], n_frames=dnet.n_frames, random_seed=0)
+        df, args['split'], n_frames=dnet.n_frames, harmonics=dnet.harmonics,
+        random_seed=0)
 
     eval_loader = DataLoader(
-        evalset, batch_size=2, shuffle=False,
+        evalset, batch_size=1, shuffle=False,
         num_workers=8, collate_fn=evalset.collate_func)
 
     sdr, sir, sar, _ = dnet.score(eval_loader, framewise=True,

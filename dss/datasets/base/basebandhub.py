@@ -48,7 +48,7 @@ class BaseBandhub(BaseAudio):
                 tracks, songs = shuffle(tracks, songs)
 
                 gss = GroupShuffleSplit(
-                    n_splits=1, test_size=0.1, random_state=10)
+                    n_splits=1, test_size=self.val_pct, random_state=10)
                 train_mask, val_mask = next(
                     gss.split(X=tracks, y=None, groups=songs))
                 val_songs = songs[val_mask]

@@ -8,15 +8,22 @@ class DenseBlock(nn.Module):
 
     """Dense block."""
 
-    def __init__(self, in_channels, out_channels=12, kernel_size=3, nlayers=1):
+    def __init__(self, in_channels, out_channels=12, kernel_size=3, nlayers=1,
+                 instance_norm=False):
         """Initialize Dense block."""
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.nlayers = nlayers
+        self.instance_norm = instance_norm
         super(DenseBlock, self).__init__()
 
         assert self.kernel_size % 2 == 1, "kernel_size must be odd."
+
+        if self.instance_norm:
+            self.norm_layer = nn.InstanceNorm2d
+        else:
+            self.norm_layer = nn.BatchNorm2d
 
         self.layers = nn.ModuleList(
             [self._build_layer(i) for i in range(self.nlayers)])
@@ -27,7 +34,7 @@ class DenseBlock(nn.Module):
                 in_channels=self.in_channels + self.out_channels * layer,
                 out_channels=self.out_channels,
                 kernel_size=self.kernel_size, padding=self.kernel_size//2),
-            nn.BatchNorm2d(self.out_channels),
+            self.norm_layer(self.out_channels),
             nn.ReLU())
         return layer
 
@@ -120,7 +127,7 @@ class DenseLSTMBlock(nn.Module):
     """DenseBlock followed by LSTMBlock and concat."""
 
     def __init__(self, in_channels, out_channels, kernel_size, nlayers,
-                 in_size, batch_size, hidden_size):
+                 in_size, batch_size, hidden_size, instance_norm):
         """Initialize DenseLSTMBlock."""
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -129,11 +136,13 @@ class DenseLSTMBlock(nn.Module):
         self.in_size = in_size
         self.batch_size = batch_size
         self.hidden_size = hidden_size
+        self.instance_norm = instance_norm
         super(DenseLSTMBlock, self).__init__()
 
         self.dense = DenseBlock(
             in_channels=self.in_channels, out_channels=self.out_channels,
-            kernel_size=self.kernel_size, nlayers=self.nlayers)
+            kernel_size=self.kernel_size, nlayers=self.nlayers,
+            instance_norm=self.instance_norm)
 
         self.lstm = LSTMBlock(
             in_channels=self.out_channels, in_size=self.in_size,
@@ -144,3 +153,9 @@ class DenseLSTMBlock(nn.Module):
         x = self.dense(x)
         x1 = self.lstm(x)
         return torch.cat([x, x1], dim=1)
+
+class Identity(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+    def forward(self, x):
+        return x

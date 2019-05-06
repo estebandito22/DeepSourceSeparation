@@ -311,11 +311,22 @@ class SourceSeparator(Trainer):
                 checkpoint = torch.load(model_dict, map_location='cpu')
 
         for (k, v) in checkpoint['trainer_dict'].items():
-            setattr(self, k, v)
+            if k != 'num_epochs':
+                setattr(self, k, v)
 
         self.USE_CUDA = torch.cuda.is_available()
         self._init_nn()
         self.model.load_state_dict(checkpoint['state_dict'])
+        self.optimizer.load_state_dict(
+            checkpoint['trainer_dict']['optimizer'].state_dict())
+        if self.mslr_scheduler is not None:
+            self.mslr_scheduler.load_state_dict(
+                checkpoint['trainer_dict']['mslr_scheduler'].state_dict())
+        if self.plateau_scheduler is not None:
+            self.plateau_scheduler.load_state_dict(
+                checkpoint['trainer_dict']['plateau_scheduler'].state_dict())
+        self.torch_rng_state = checkpoint['trainer_dict']['torch_rng_state']
+        self.numpy_rng_state = checkpoint['trainer_dict']['numpy_rng_state']
         torch.set_rng_state(self.torch_rng_state)
         np.random.set_state(self.numpy_rng_state)
         self.nn_epoch += 1

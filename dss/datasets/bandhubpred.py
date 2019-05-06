@@ -3,6 +3,7 @@
 import torch
 import numpy as np
 from dss.datasets.base.basebandhub import BaseBandhub
+import librosa
 
 
 class BandhubPredset(BaseBandhub):
@@ -10,7 +11,7 @@ class BandhubPredset(BaseBandhub):
     """Class for loading bandhub dataset during predictions."""
 
     def __init__(self, metadata, split='train', mag_func='sqrt', n_frames=513,
-                 random_seed=None):
+                 harmonics=False, val_pct=0.1, random_seed=None):
         """
         Initialize BandhubPredset.
 
@@ -29,10 +30,15 @@ class BandhubPredset(BaseBandhub):
         self.mag_func = mag_func
         self.n_frames = n_frames
         self.random_seed = random_seed
+        self.harmonics = harmonics
+        self.val_pct = val_pct
         self.target_indexes = None
         self.related_tracks_idxs = None
         self.related_track_instruments = None
         self.n_classes = self.metadata['instrument'].nunique()
+
+        # if self.harmonics:
+        #     self.fft_freqs = librosa.fft_frequencies(sr=22050)
 
         # split data first based on songId
         self._train_test_split()
@@ -80,6 +86,16 @@ class BandhubPredset(BaseBandhub):
         # take magnitude of combined stems and scale
         X_complex = torch.zeros_like(X).copy_(X)
         X = self._stft_mag(X)
+        if self.harmonics:
+            X = X.numpy()
+            if X.shape[1] == 1025:
+                fft_freqs = librosa.fft_frequencies(sr=22050, n_fft=2048)
+            elif X.shape[1] == 2049:
+                fft_freqs = librosa.fft_frequencies(sr=44100, n_fft=4096)
+            X = librosa.interp_harmonics(X, fft_freqs, [1, 2, 3], axis=1)
+            X = torch.from_numpy(X)
+            X = X.view(6, X.size(2), self.n_frames)
+
         # stack targets and add metadata for collate function
         y_all_complex = torch.stack(y_all_complex)
 

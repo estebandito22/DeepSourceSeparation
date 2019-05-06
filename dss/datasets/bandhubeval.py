@@ -5,6 +5,7 @@ from collections import defaultdict
 import numpy as np
 import torch
 import torch.nn.functional as F
+import librosa
 
 from dss.datasets.bandhubpred import BandhubPredset
 
@@ -14,7 +15,7 @@ class BandhubEvalset(BandhubPredset):
     """Class for loading bandhub dataset during evaluation."""
 
     def __init__(self, metadata, split='train', mag_func='sqrt', n_frames=513,
-                 random_seed=None):
+                 harmonics=False, val_pct=0.1, random_seed=None):
         """
         Initialize BandhubEvalset.
 
@@ -30,7 +31,8 @@ class BandhubEvalset(BandhubPredset):
         """
         BandhubPredset.__init__(
             self, metadata=metadata, split=split, mag_func=mag_func,
-            n_frames=n_frames, random_seed=random_seed)
+            n_frames=n_frames, harmonics=harmonics, val_pct=val_pct,
+            random_seed=random_seed)
 
     @staticmethod
     def _split_track(X, length, dim=1):
@@ -134,6 +136,17 @@ class BandhubEvalset(BandhubPredset):
             X0, _ = self._split_track(X[0], self.n_frames, 1)
             X1, ns = self._split_track(X[1], self.n_frames, 1)
             X = torch.stack([X0, X1], dim=1)
+
+        if self.harmonics:
+            X = X.numpy()
+            if X.shape[2] == 1025:
+                fft_freqs = librosa.fft_frequencies(sr=22050, n_fft=2048)
+            elif X.shape[2] == 2049:
+                fft_freqs = librosa.fft_frequencies(sr=44100, n_fft=4096)
+            X = librosa.interp_harmonics(X, fft_freqs, [1, 2, 3], axis=2)
+            X = torch.from_numpy(X)
+            X = X.transpose(1, 0).contiguous()
+            X = X.view(X.size(0), 6, X.size(3), self.n_frames)
 
         t = torch.tensor([y_all_complex.size(-2)])
         c = torch.tensor(c_all).long()

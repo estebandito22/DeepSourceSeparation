@@ -8,6 +8,7 @@ from torch.distributions.dirichlet import Dirichlet
 from torch.distributions.uniform import Uniform
 from dss.datasets.base.basebandhub import BaseBandhub
 from scipy.stats import uniform
+import librosa
 
 
 class BandhubDataset(BaseBandhub):
@@ -18,7 +19,8 @@ class BandhubDataset(BaseBandhub):
                  mag_func='sqrt', n_frames=513, upper_bound_slope=60,
                  lower_bound_slope=30, threshold=None, chan_swap=0,
                  uniform_volumes=False, interference=0.0, instrument_mask=0.0,
-                 gain_slope=0.0, mask_curriculum=0, random_seed=None):
+                 gain_slope=0.0, mask_curriculum=0, harmonics=False,
+                 val_pct=0.1, random_seed=None):
         """
         Initialize BandhubDataset.
 
@@ -48,11 +50,16 @@ class BandhubDataset(BaseBandhub):
         self.mask_curriculum = mask_curriculum
         self.random_seed = random_seed
         self.gain_slope = gain_slope
+        self.harmonics = harmonics
+        self.val_pct = val_pct
         self.related_tracks_idxs = None
         self.n_classes = self.metadata['instrument'].nunique()
 
         if not self.mask_curriculum:
             self.mask_prob = self.instrument_mask
+
+        # if self.harmonics:
+        #     self.fft_freqs = librosa.fft_frequencies(sr=22050)
 
         # split data first based on songId
         self._train_test_split()
@@ -193,6 +200,15 @@ class BandhubDataset(BaseBandhub):
 
         # take magnitude of combined stems and scale
         X = self._stft_mag(X)
+        if self.harmonics:
+            X = X.numpy()
+            if X.shape[1] == 1025:
+                fft_freqs = librosa.fft_frequencies(sr=22050, n_fft=2048)
+            elif X.shape[1] == 2049:
+                fft_freqs = librosa.fft_frequencies(sr=44100, n_fft=4096)
+            X = librosa.interp_harmonics(X, fft_freqs, [1, 2, 3], axis=1)
+            X = torch.from_numpy(X)
+            X = X.view(6, X.size(2), self.n_frames)
 
         # stack target tensors
         y_all = torch.stack(y_all)

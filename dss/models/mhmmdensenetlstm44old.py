@@ -9,7 +9,6 @@ import torch.nn.functional as F
 from dss.models.densenetsublayers import DenseBlock
 from dss.models.densenetsublayers import DownSampleBlock
 from dss.models.densenetsublayers import DenseLSTMBlock
-from dss.models.densenetsublayers import Identity
 
 
 class MHMMDenseNetLSTMModel(nn.Module):
@@ -17,121 +16,84 @@ class MHMMDenseNetLSTMModel(nn.Module):
     """Multi-Head MMDenseNetLSTM source separation model."""
 
     def __init__(self, n_classes=1, n_shared_layers=3, in_channels=1,
-                 out_channels=1, kernel_size=3, hidden_size=128, batch_size=64,
-                 normalize_masks=False, regression=False, offset=0,
-                 k=[14, 4, 7, 12], dropout=0.0, instance_norm=False,
-                 initial_norm=True, n_layers_low=5, n_layers_high=4,
-                 n_layers_full=3, n_layers_final=3):
+                 kernel_size=3, hidden_size=128, batch_size=64,
+                 normalize_masks=False):
         """Initialize MhMMDenseNetLSTMModel."""
         self.n_classes = n_classes
         self.n_shared_layers = n_shared_layers
         self.in_channels = in_channels
-        self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.hidden_size = hidden_size
         self.batch_size = batch_size
         self.normalize_masks = normalize_masks
-        self.regression = regression
-        self.offset = offset
-        self.k = k
-        self.dropout = dropout
-        self.instance_norm = instance_norm
-        self.initial_norm = initial_norm
-        self.n_layers_low = n_layers_low
-        self.n_layers_high = n_layers_high
-        self.n_layers_full = n_layers_full
-        self.n_layers_final = n_layers_final
         super(MHMMDenseNetLSTMModel, self).__init__()
 
         assert (self.n_shared_layers <= 10) and (self.n_shared_layers >= 1), \
             "shared layers must be <= 3."
 
-        if self.initial_norm:
-            if self.instance_norm:
-                self.norm_layer = nn.InstanceNorm2d
-            else:
-                self.norm_layer = nn.BatchNorm2d
-        else:
-            self.norm_layer = Identity
-
         #
         # Convolution Low approx 4.1kHz
         #
 
-        # 1 x 384 x 128
+        # 1 x 384 x 129
         layer1 = nn.Sequential(
-            self.norm_layer(in_channels),
+            nn.BatchNorm2d(in_channels),
             nn.Conv2d(
                 in_channels=in_channels, out_channels=32, kernel_size=3,
                 padding=1),
             # 1 x 384 x 128
             DenseBlock(
-                in_channels=32, out_channels=self.k[0],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_low,
-                instance_norm=self.instance_norm))
+                in_channels=32, out_channels=14, kernel_size=self.kernel_size,
+                nlayers=5))
 
         # 14 x 384 x 128
         layer2 = nn.Sequential(
-            DownSampleBlock(channels=self.k[0]),
+            DownSampleBlock(channels=14),
             DenseBlock(
-                in_channels=self.k[0], out_channels=self.k[0],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_low,
-                instance_norm=self.instance_norm))
+                in_channels=14, out_channels=14, kernel_size=self.kernel_size,
+                nlayers=5))
 
         # 14 x 192 x 64
         layer3 = nn.Sequential(
-            DownSampleBlock(channels=self.k[0]),
+            DownSampleBlock(channels=14),
             DenseBlock(
-                in_channels=self.k[0], out_channels=self.k[0],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_low,
-                instance_norm=self.instance_norm))
+                in_channels=14, out_channels=14, kernel_size=self.kernel_size,
+                nlayers=5))
 
         # 14 x 96 x 32
         layer4 = nn.Sequential(
-            DownSampleBlock(channels=self.k[0]),
+            DownSampleBlock(channels=14),
             DenseLSTMBlock(
-                in_channels=self.k[0], out_channels=self.k[0],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_low,
-                in_size=48, batch_size=self.batch_size,
-                hidden_size=self.hidden_size,
-                instance_norm=self.instance_norm))
+                in_channels=14, out_channels=14, kernel_size=self.kernel_size,
+                nlayers=5, in_size=48, batch_size=self.batch_size,
+                hidden_size=self.hidden_size))
 
         # Deconvolution
         # 15 x 48 x 16
-        layer5 = nn.Sequential(
-            nn.ConvTranspose2d(
-                in_channels=self.k[0] + 1, out_channels=self.k[0] + 1,
-                kernel_size=2, stride=2),
-            nn.Dropout(p=self.dropout))
+        layer5 = nn.ConvTranspose2d(
+            in_channels=15, out_channels=15, kernel_size=2, stride=2)
 
         # 29 x 96 x 32
         layer6 = nn.Sequential(
             DenseBlock(
-                in_channels=self.k[0] * 2 + 1, out_channels=self.k[0],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_low,
-                instance_norm=self.instance_norm),
+                in_channels=29, out_channels=14, kernel_size=self.kernel_size,
+                nlayers=5),
             nn.ConvTranspose2d(
-                in_channels=self.k[0], out_channels=self.k[0],
-                kernel_size=2, stride=2),
-            nn.Dropout(p=self.dropout))
+                in_channels=14, out_channels=14, kernel_size=2, stride=2))
 
         # 28 x 192 x 64
         layer7 = nn.Sequential(
             DenseLSTMBlock(
-                in_channels=self.k[0] * 2, out_channels=self.k[0],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_low,
-                in_size=192, batch_size=self.batch_size,
-                hidden_size=self.hidden_size,
-                instance_norm=self.instance_norm),
+                in_channels=28, out_channels=14, kernel_size=self.kernel_size,
+                nlayers=5, in_size=192, batch_size=self.batch_size,
+                hidden_size=self.hidden_size),
             nn.ConvTranspose2d(
-                in_channels=self.k[0] + 1, out_channels=self.k[0] + 1,
-                kernel_size=2, stride=2))
+                in_channels=15, out_channels=15, kernel_size=2, stride=2))
 
         # 29 x 384 x 128
         layer8 = DenseBlock(
-            in_channels=self.k[0] * 2 + 1, out_channels=self.k[0],
-            kernel_size=self.kernel_size, nlayers=self.n_layers_low,
-            instance_norm=self.instance_norm)
+            in_channels=29, out_channels=14, kernel_size=self.kernel_size,
+            nlayers=5)
 
         # 14 x 384 x 128
 
@@ -161,81 +123,66 @@ class MHMMDenseNetLSTMModel(nn.Module):
         # Convolution high 11.025kHz
         #
 
-        # 1 x 641 x 128
+        # 1 x 641 x 129
         layer1 = nn.Sequential(
-            self.norm_layer(in_channels),
+            nn.BatchNorm2d(in_channels),
             nn.Conv2d(
                 in_channels=in_channels, out_channels=32, kernel_size=(4, 3),
                 padding=1),
             # 1 x 640 x 128
             DenseBlock(
-                in_channels=32, out_channels=self.k[1],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_high,
-                instance_norm=self.instance_norm))
+                in_channels=32, out_channels=4, kernel_size=self.kernel_size,
+                nlayers=4))
 
         # 4 x 640 x 128
         layer2 = nn.Sequential(
-            DownSampleBlock(channels=self.k[1]),
+            DownSampleBlock(channels=4),
             DenseBlock(
-                in_channels=self.k[1], out_channels=self.k[1],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_high,
-                instance_norm=self.instance_norm))
+                in_channels=4, out_channels=4, kernel_size=self.kernel_size,
+                nlayers=4))
 
         # 4 x 320 x 64
         layer3 = nn.Sequential(
-            DownSampleBlock(channels=self.k[1]),
+            DownSampleBlock(channels=4),
             DenseBlock(
-                in_channels=self.k[1], out_channels=self.k[1],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_high,
-                instance_norm=self.instance_norm))
+                in_channels=4, out_channels=4, kernel_size=self.kernel_size,
+                nlayers=4))
 
         # 4 x 160 x 32
         layer4 = nn.Sequential(
-            DownSampleBlock(channels=self.k[1]),
+            DownSampleBlock(channels=4),
             DenseLSTMBlock(
-                in_channels=self.k[1], out_channels=self.k[1],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_high,
-                in_size=80, batch_size=self.batch_size,
-                hidden_size=self.hidden_size // 4,
-                instance_norm=self.instance_norm))
+                in_channels=4, out_channels=4, kernel_size=self.kernel_size,
+                nlayers=4, in_size=80, batch_size=self.batch_size,
+                hidden_size=self.hidden_size // 4))
 
         # Deconvolution
         # 5 x 80 x 16
-        layer5 = nn.Sequential(
-            nn.ConvTranspose2d(
-                in_channels=self.k[1] + 1, out_channels=self.k[1] + 1,
-                kernel_size=2, stride=2),
-            nn.Dropout(p=self.dropout))
+        layer5 = nn.ConvTranspose2d(
+            in_channels=5, out_channels=5, kernel_size=2, stride=2)
 
         # 9 x 160 x 32
         layer6 = nn.Sequential(
             DenseBlock(
-                in_channels=self.k[1] * 2 + 1, out_channels=self.k[1],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_high,
-                instance_norm=self.instance_norm),
+                in_channels=9, out_channels=4, kernel_size=self.kernel_size,
+                nlayers=4),
             nn.ConvTranspose2d(
-                in_channels=self.k[1], out_channels=self.k[1],
-                kernel_size=2, stride=2),
-            nn.Dropout(p=self.dropout))
+                in_channels=4, out_channels=4, kernel_size=2, stride=2))
 
         # 8 x 320 x 64
         layer7 = nn.Sequential(
             DenseBlock(
-                in_channels=self.k[1] * 2, out_channels=self.k[1],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_high,
-                instance_norm=self.instance_norm),
+                in_channels=8, out_channels=4, kernel_size=self.kernel_size,
+                nlayers=4),
             nn.ConvTranspose2d(
-                in_channels=self.k[1], out_channels=self.k[1],
-                kernel_size=2, stride=2))
+                in_channels=4, out_channels=4, kernel_size=2, stride=2))
 
         # 8 x 640 x 128
         layer8 = nn.Sequential(
             DenseBlock(
-                in_channels=self.k[1] * 2, out_channels=self.k[1],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_high,
-                instance_norm=self.instance_norm),
-            nn.Conv2d(
-                in_channels=self.k[1], out_channels=self.k[0], kernel_size=1))
+                in_channels=8, out_channels=4, kernel_size=self.kernel_size,
+                nlayers=4),
+            nn.Conv2d(in_channels=4, out_channels=14, kernel_size=1))
 
         # 14 x 640 x 128
 
@@ -262,113 +209,167 @@ class MHMMDenseNetLSTMModel(nn.Module):
                  'deconv{}'.format(i): class_deconv_layers})
 
         #
-        # Convolution Full
+        # Convolution higher 22.05 kHz
         #
 
-        # 1 x 1025 x 128
+        # 1 x 1024 x 129
         layer1 = nn.Sequential(
-            self.norm_layer(in_channels),
+            nn.BatchNorm2d(in_channels),
             nn.Conv2d(
-                in_channels=in_channels, out_channels=32, kernel_size=(4, 3),
+                in_channels=in_channels, out_channels=32, kernel_size=3,
                 padding=1),
             # 1 x 1024 x 128
             DenseBlock(
-                in_channels=32, out_channels=self.k[2],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_full,
-                instance_norm=self.instance_norm))
+                in_channels=32, out_channels=2, kernel_size=self.kernel_size,
+                nlayers=1))
 
-        # 7 x 1024 x 128
+        # 2 x 1024 x 128
         layer2 = nn.Sequential(
-            DownSampleBlock(channels=self.k[2]),
+            DownSampleBlock(channels=2),
             DenseBlock(
-                in_channels=self.k[2], out_channels=self.k[2],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_full,
-                instance_norm=self.instance_norm))
+                in_channels=2, out_channels=2, kernel_size=self.kernel_size,
+                nlayers=1))
 
-        # 7 x 512 x 64
+        # 2 x 512 x 64
         layer3 = nn.Sequential(
-            DownSampleBlock(channels=self.k[2]),
-            DenseBlock(
-                in_channels=self.k[2], out_channels=self.k[2],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_full + 1,
-                instance_norm=self.instance_norm))
-
-        # 7 x 256 x 32
-        layer4 = nn.Sequential(
-            DownSampleBlock(channels=self.k[2]),
+            DownSampleBlock(channels=2),
             DenseLSTMBlock(
-                in_channels=self.k[2], out_channels=self.k[2],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_full + 2,
-                in_size=128, batch_size=self.batch_size,
-                hidden_size=self.hidden_size,
-                instance_norm=self.instance_norm))
-
-        # 8 x 128 x 16
-        layer5 = nn.Sequential(
-            DownSampleBlock(channels=self.k[2] + 1),
-            DenseBlock(
-                in_channels=self.k[2] + 1, out_channels=self.k[2],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_full + 2,
-                instance_norm=self.instance_norm))
+                in_channels=2, out_channels=2, kernel_size=self.kernel_size,
+                nlayers=1, in_size=256, batch_size=self.batch_size,
+                hidden_size=self.hidden_size // 16))
 
         # Deconvolution
-        # 7 x 64 x 8
-        layer6 = nn.Sequential(
-            nn.ConvTranspose2d(
-                in_channels=self.k[2], out_channels=self.k[2], kernel_size=2,
-                stride=2),
-            nn.Dropout(p=self.dropout))
+        # 3 x 256 x 32
+        layer4 = nn.ConvTranspose2d(
+            in_channels=3, out_channels=3, kernel_size=2, stride=2)
 
-        # 15 x 128 x 16
+        # 5 x 512 x 64
+        layer5 = nn.Sequential(
+            DenseBlock(
+                in_channels=5, out_channels=2, kernel_size=self.kernel_size,
+                nlayers=1),
+            nn.ConvTranspose2d(
+                in_channels=2, out_channels=2, kernel_size=2, stride=2))
+
+        # 4 x 1024 x 128
+        layer6 = nn.Sequential(
+            DenseBlock(
+                in_channels=4, out_channels=2, kernel_size=self.kernel_size,
+                nlayers=1),
+            nn.Conv2d(in_channels=2, out_channels=14, kernel_size=1))
+
+        # 14 x 1024 x 128
+
+        all_layers = [layer1, layer2, layer3, layer4, layer5, layer6]
+
+        n = 3
+        shared_conv_layers = nn.ModuleList(
+            all_layers[:min(n, self.n_shared_layers)])
+        shared_deconv_layers = nn.ModuleList(
+            all_layers[n:max(n, self.n_shared_layers)])
+        self.shared_layers_higher = nn.ModuleDict(
+            {'conv': shared_conv_layers,
+             'deconv': shared_deconv_layers})
+
+        self.class_layers_higher = nn.ModuleDict()
+        for i in range(self.n_classes):
+            class_conv_layers = deepcopy(nn.ModuleList(
+                all_layers[min(n, self.n_shared_layers):n]))
+            class_deconv_layers = deepcopy(nn.ModuleList(
+                all_layers[max(n, self.n_shared_layers):]))
+            self.class_layers_higher.update(
+                {'conv{}'.format(i): class_conv_layers,
+                 'deconv{}'.format(i): class_deconv_layers})
+
+        #
+        # Convolution Full
+        #
+
+        # 1 x 2049 x 129
+        layer1 = nn.Sequential(
+            nn.BatchNorm2d(in_channels),
+            nn.Conv2d(
+                in_channels=in_channels, out_channels=32, kernel_size=(4, 3),
+                padding=1),
+            # 1 x 2048 x 128
+            DenseBlock(
+                in_channels=32, out_channels=7, kernel_size=self.kernel_size,
+                nlayers=3))
+
+        # 7 x 2048 x 128
+        layer2 = nn.Sequential(
+            DownSampleBlock(channels=7),
+            DenseBlock(
+                in_channels=7, out_channels=7, kernel_size=self.kernel_size,
+                nlayers=3))
+
+        # 7 x 1024 x 64
+        layer3 = nn.Sequential(
+            DownSampleBlock(channels=7),
+            DenseBlock(
+                in_channels=7, out_channels=7, kernel_size=self.kernel_size,
+                nlayers=4))
+
+        # 7 x 512 x 32
+        layer4 = nn.Sequential(
+            DownSampleBlock(channels=7),
+            DenseLSTMBlock(
+                in_channels=7, out_channels=7, kernel_size=self.kernel_size,
+                nlayers=5, in_size=256, batch_size=self.batch_size,
+                hidden_size=self.hidden_size))
+
+        # 8 x 256 x 16
+        layer5 = nn.Sequential(
+            DownSampleBlock(channels=8),
+            DenseBlock(
+                in_channels=8, out_channels=7, kernel_size=self.kernel_size,
+                nlayers=5))
+
+        # Deconvolution
+        # 7 x 128 x 8
+        layer6 = nn.ConvTranspose2d(
+            in_channels=7, out_channels=7, kernel_size=2, stride=2)
+
+        # 15 x 256 x 16
         layer7 = nn.Sequential(
             DenseBlock(
-                in_channels=self.k[2] * 2 + 1, out_channels=self.k[2],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_full + 2,
-                instance_norm=self.instance_norm),
+                in_channels=15, out_channels=7, kernel_size=self.kernel_size,
+                nlayers=5),
             nn.ConvTranspose2d(
-                in_channels=self.k[2], out_channels=self.k[2],
-                kernel_size=2, stride=2),
-            nn.Dropout(p=self.dropout))
+                in_channels=7, out_channels=7, kernel_size=2, stride=2))
 
-        # 14 x 256 x 32
+        # 14 x 512 x 32
         layer8 = nn.Sequential(
             DenseBlock(
-                in_channels=self.k[2] * 2, out_channels=self.k[2],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_full + 1,
-                instance_norm=self.instance_norm),
+                in_channels=14, out_channels=7, kernel_size=self.kernel_size,
+                nlayers=4),
             nn.ConvTranspose2d(
-                in_channels=self.k[2], out_channels=self.k[2],
-                kernel_size=2, stride=2),
-            nn.Dropout(p=self.dropout))
+                in_channels=7, out_channels=7, kernel_size=2, stride=2))
 
-        # 14 x 512 x 64
+        # 14 x 1024 x 64
         layer9 = nn.Sequential(
             DenseLSTMBlock(
-                in_channels=self.k[2] * 2, out_channels=self.k[2],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_full,
-                in_size=512, batch_size=self.batch_size,
-                hidden_size=self.hidden_size,
-                instance_norm=self.instance_norm),
+                in_channels=14, out_channels=7, kernel_size=self.kernel_size,
+                nlayers=3, in_size=1024, batch_size=self.batch_size,
+                hidden_size=self.hidden_size),
             nn.ConvTranspose2d(
-                in_channels=self.k[2] + 1, out_channels=self.k[2] + 1,
-                kernel_size=2, stride=2))
+                in_channels=8, out_channels=8, kernel_size=2, stride=2))
 
-        # 15 x 1024 x 128
+        # 15 x 2048 x 128
         layer10 = DenseBlock(
-            in_channels=self.k[2] * 2 + 1, out_channels=self.k[2],
-            kernel_size=self.kernel_size, nlayers=self.n_layers_full,
-            instance_norm=self.instance_norm)
+            in_channels=15, out_channels=7, kernel_size=self.kernel_size,
+            nlayers=3)
 
-        # 7 x 1024 x 128
+        # 7 x 2048 x 128
 
         all_layers = [layer1, layer2, layer3, layer4, layer5, layer6,
                       layer7, layer8, layer9, layer10]
 
         n = 5
         shared_conv_layers = nn.ModuleList(
-            all_layers[:min(n, self.n_shared_layers + self.offset)])
+            all_layers[:min(n, self.n_shared_layers)])
         shared_deconv_layers = nn.ModuleList(
-            all_layers[n:max(n, self.n_shared_layers + self.offset)])
+            all_layers[n:max(n, self.n_shared_layers)])
         self.shared_layers_full = nn.ModuleDict(
             {'conv': shared_conv_layers,
              'deconv': shared_deconv_layers})
@@ -376,9 +377,9 @@ class MHMMDenseNetLSTMModel(nn.Module):
         self.class_layers_full = nn.ModuleDict()
         for i in range(self.n_classes):
             class_conv_layers = deepcopy(nn.ModuleList(
-                all_layers[min(n, self.n_shared_layers + self.offset):n]))
+                all_layers[min(n, self.n_shared_layers):n]))
             class_deconv_layers = deepcopy(nn.ModuleList(
-                all_layers[max(n, self.n_shared_layers + self.offset):]))
+                all_layers[max(n, self.n_shared_layers):]))
             self.class_layers_full.update(
                 {'conv{}'.format(i): class_conv_layers,
                  'deconv{}'.format(i): class_deconv_layers})
@@ -387,20 +388,19 @@ class MHMMDenseNetLSTMModel(nn.Module):
         # Final Dense
         #
 
-        # 21 x 1024 x 128
+        # 21 x 2048 x 128
         final_layer = nn.Sequential(
             DenseBlock(
-                in_channels=self.k[0] + self.k[2], out_channels=self.k[3],
-                kernel_size=self.kernel_size, nlayers=self.n_layers_final),
-            nn.Dropout(p=self.dropout),
+                in_channels=21, out_channels=12, kernel_size=self.kernel_size,
+                nlayers=3),
             nn.Conv2d(
-                in_channels=self.k[3], out_channels=self.out_channels,
-                kernel_size=(2, 1), padding=(1, 0)))
+                in_channels=12, out_channels=self.in_channels, kernel_size=2,
+                padding=1))
 
         self.class_final_layers = nn.ModuleList(
             [deepcopy(final_layer) for _ in range(self.n_classes)])
 
-        # 1 x 1025 x 128
+        # 1 x 2049 x 129
 
     def detach_hidden(self, bs):
         """Detach hidden state of LSTMs."""
@@ -409,6 +409,8 @@ class MHMMDenseNetLSTMModel(nn.Module):
             self.shared_layers_low['conv'][3][1].lstm.detach_hidden(bs)
         if len(self.shared_layers_high['conv']) == 4:
             self.shared_layers_high['conv'][3][1].lstm.detach_hidden(bs)
+        if len(self.shared_layers_higher['conv']) == 3:
+            self.shared_layers_higher['conv'][2][1].lstm.detach_hidden(bs)
         if len(self.shared_layers_full['conv']) >= 4:
             self.shared_layers_full['conv'][3][1].lstm.detach_hidden(bs)
 
@@ -426,6 +428,9 @@ class MHMMDenseNetLSTMModel(nn.Module):
                     'conv{}'.format(i)][-1][1].lstm.detach_hidden(bs)
             if self.class_layers_high['conv{}'.format(i)]:
                 self.class_layers_high[
+                    'conv{}'.format(i)][-1][1].lstm.detach_hidden(bs)
+            if self.class_layers_higher['conv{}'.format(i)]:
+                self.class_layers_higher[
                     'conv{}'.format(i)][-1][1].lstm.detach_hidden(bs)
             if len(self.class_layers_full['conv{}'.format(i)]) >= 2:
                 self.class_layers_full[
@@ -556,29 +561,26 @@ class MHMMDenseNetLSTMModel(nn.Module):
         out_low = self._band_forward(
             x[:, :, :384, :], self.shared_layers_low, self.class_layers_low)
         out_high = self._band_forward(
-            x[:, :, 384:, :], self.shared_layers_high, self.class_layers_high)
+            x[:, :, 384:1025, :], self.shared_layers_high,
+            self.class_layers_high)
+        out_higher = self._band_forward(
+            x[:, :, 1025:, :], self.shared_layers_higher,
+            self.class_layers_higher)
         out_full = self._band_forward(
             x, self.shared_layers_full, self.class_layers_full)
 
-        out_highlow = [torch.cat([low, high], dim=2)
-                       for low, high in zip(out_low, out_high)]
+        out_highlow = [torch.cat([low, high, higher], dim=2)
+                       for low, high, higher
+                       in zip(out_low, out_high, out_higher)]
         out_all = [torch.cat([full, highlow], dim=1)
                    for full, highlow in zip(out_full, out_highlow)]
 
         # batch size x n_classes x in_channels x 1025 x n_frames
         out = self._class_final_dense(out_all)
 
-        if self.regression:
-            out = F.relu(out)
-            return out, out
-
         if self.normalize_masks:
             mask = F.softmax(out, dim=1)
         else:
             mask = torch.sigmoid(out)
-
-        if self.in_channels > 2:
-            x = x.view(x.size(0), 3, self.out_channels, x.size(2), x.size(3))
-            x = x[:, 0]
 
         return x.unsqueeze(1).expand_as(mask) * mask, mask

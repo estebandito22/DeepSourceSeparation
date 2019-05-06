@@ -1,14 +1,17 @@
 """Classes to train Deep Source Separation Models."""
 
+import os
 import numpy as np
 from tqdm import tqdm
 from librosa.core import magphase
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import MultiStepLR
 
 from dss.trainers.sourceseparator import SourceSeparator
 from dss.models.mhmmdensenetlstm import MHMMDenseNetLSTMModel
@@ -23,12 +26,14 @@ class MHMMDenseNetLSTM(SourceSeparator):
     """Class to train and evaluate MDenseNetModel."""
 
     def __init__(self, n_classes=1, n_shared_layers=3, in_channels=1,
-                 kernel_size=3, hidden_size=128, loss_alphas=False,
-                 normalize_masks=False, batch_size=64, lr=0.001,
-                 weight_decay=0, num_epochs=100, objective='L1',
+                 out_channels=1, kernel_size=3, hidden_size=128,
+                 loss_alphas=False, normalize_masks=False, batch_size=64,
+                 lr=0.001, weight_decay=0, num_epochs=100, objective='L1',
                  eval_version='v3', train_class=-1, n_fft=1025, mwf=0,
                  regression=False, offset=0, k=[14, 4, 7, 12],
-                 dropout=0.0):
+                 n_layers_low=5, n_layers_high=4, n_layers_full=3,
+                 n_layers_final=3, dropout=0.0, instance_norm=False,
+                 accumulate_grad=0, initial_norm=True, report_interval=1):
         """
         Initialize MHMMDenseNetLSTM model.
 
@@ -57,6 +62,7 @@ class MHMMDenseNetLSTM(SourceSeparator):
         self.n_classes = n_classes
         self.n_shared_layers = n_shared_layers
         self.in_channels = in_channels
+        self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.hidden_size = hidden_size
         self.loss_alphas = loss_alphas
@@ -73,7 +79,15 @@ class MHMMDenseNetLSTM(SourceSeparator):
         self.regression = regression
         self.offset = offset
         self.k = k
+        self.n_layers_low = n_layers_low
+        self.n_layers_high = n_layers_high
+        self.n_layers_full = n_layers_full
+        self.n_layers_final = n_layers_final
         self.dropout = dropout
+        self.instance_norm = instance_norm
+        self.accumulate_grad = accumulate_grad
+        self.initial_norm = initial_norm
+        self.report_interval = report_interval
         self.n_frames = None
         self.upper_bound_slope = None
         self.lower_bound_slope = None
@@ -115,7 +129,11 @@ class MHMMDenseNetLSTM(SourceSeparator):
             in_channels=self.in_channels, kernel_size=self.kernel_size,
             hidden_size=self.hidden_size, batch_size=self.batch_size,
             normalize_masks=self.normalize_masks, regression=self.regression,
-            offset=self.offset, k=self.k, dropout=self.dropout)
+            offset=self.offset, k=self.k, dropout=self.dropout,
+            out_channels=self.out_channels, instance_norm=self.instance_norm,
+            initial_norm=self.initial_norm, n_layers_low=self.n_layers_low,
+            n_layers_high=self.n_layers_high, n_layers_full=self.n_layers_full,
+            n_layers_final=self.n_layers_final)
 
         if pretrained_state is not None:
             self._load_pretrained(pretrained_state)
@@ -124,10 +142,10 @@ class MHMMDenseNetLSTM(SourceSeparator):
             self.model.parameters(), self.lr, weight_decay=self.weight_decay)
 
         self.plateau_scheduler = ReduceLROnPlateau(
-            self.optimizer, patience=50, cooldown=1)
+            self.optimizer, patience=50, verbose=True)
 
-        # self.mslr_scheduler = MultiStepLR(
-        #     self.optimizer, milestones=[200, 250, 300])
+        self.mslr_scheduler = MultiStepLR(
+            self.optimizer, milestones=[300, 350, 400, 450, 500], gamma=0.25)
 
         if self.loss_alphas or self.train_class != -1:
             reduction = 'none'
@@ -138,6 +156,9 @@ class MHMMDenseNetLSTM(SourceSeparator):
             self.loss_func = nn.L1Loss(reduction=reduction)
         elif self.objective == 'L2':
             self.loss_func = nn.MSELoss(reduction=reduction)
+        elif self.objective == 'tanh':
+            self.loss_func_loss = nn.MSELoss(reduction=reduction)
+            self.loss_func = self._tanh_loss
         else:
             raise ValueError("objective must be L1 or L2.")
 
@@ -153,12 +174,18 @@ class MHMMDenseNetLSTM(SourceSeparator):
         self.torch_rng_state = torch.get_rng_state()
         self.numpy_rng_state = np.random.get_state()
 
+    def _tanh_loss(self, x, y):
+        x = torch.tanh(F.threshold(torch.log(x), -100.0, -100.0) / 4.0)
+        y = torch.tanh(F.threshold(torch.log(y), -100.0, -100.0) / 4.0)
+        return self.loss_func_loss(x, y)
+
     def _train_epoch(self, loader):
         """Train epoch."""
         self.model.train()
         train_loss = 0
         samples_processed = 0
         np.random.seed(self.nn_epoch)
+        iteration = 1
 
         for batch_samples in tqdm(loader):
 
@@ -172,9 +199,6 @@ class MHMMDenseNetLSTM(SourceSeparator):
                 X = X.cuda()
                 y = y.cuda()
 
-            # forward pass
-            self.model.zero_grad()
-
             # detach hidden state
             self.model.detach_hidden(X.size(0))
 
@@ -185,8 +209,22 @@ class MHMMDenseNetLSTM(SourceSeparator):
             loss = self._apply_class_mask(loss)
             if self.loss_alphas:
                 loss = self._apply_loss_weights(loss, y)
-            loss.backward()
-            self.optimizer.step()
+
+            if self.accumulate_grad:
+                if iteration < self.accumulate_grad / self.batch_size:
+                    iteration += 1
+                    loss = loss / (self.accumulate_grad / self.batch_size)
+                    loss.backward()
+                else:
+                    self.optimizer.step()
+                    iteration = 1
+                    # forward pass
+                    self.model.zero_grad()
+            else:
+                loss.backward()
+                self.optimizer.step()
+                # forward pass
+                self.model.zero_grad()
 
             # compute train loss
             bs = X.size(0)
@@ -253,15 +291,35 @@ class MHMMDenseNetLSTM(SourceSeparator):
             warm_start : bool, continue from previous results.
 
         """
+        # store datasets
+        self.save_dir = save_dir
+        self.n_frames = train_dataset.n_frames
+        self.upper_bound_slope = train_dataset.upper_bound_slope
+        self.lower_bound_slope = train_dataset.lower_bound_slope
+        self.mag_func = train_dataset.mag_func
+        self.threshold = train_dataset.threshold
+        self.chan_swap = train_dataset.chan_swap
+        self.uniform_volumes = train_dataset.uniform_volumes
+        self.interference = train_dataset.interference
+        self.instrument_mask = train_dataset.instrument_mask
+        self.gain_slope = train_dataset.gain_slope
+        self.mask_curriculum = train_dataset.mask_curriculum
+        self.pretrained = bool(pretrained_state)
+        self.harmonics = train_dataset.harmonics
+        self.val_pct = train_dataset.val_pct
+
         # Print settings to output file
         print("Settings:\n\
                Num Classes: {}\n\
                Num Shared Layers: {}\n\
                Layer Offset: {}\n\
                In Channels: {}\n\
+               Out Channels: {}\n\
+               Harmonics: {}\n\
                Kernel Size: {}\n\
                Hidden Size: {}\n\
                K: {} \n\
+               N Layers: {}\n\
                Dropout: {}\n\
                Loss Alphas: {}\n\
                Normalize Masks: {}\n\
@@ -281,13 +339,19 @@ class MHMMDenseNetLSTM(SourceSeparator):
                Learning Rate: {}\n\
                Weight Decay: {}\n\
                Objective: {}\n\
+               Val Pct: {}\n\
+               Instance Norm: {}\n\
+               Initial Norm: {}\n\
+               Accumulate Grad: {}\n\
                Regression: {}\n\
                Pretrained: {}\n\
                Train Class: {}\n\
                Save Dir: {}".format(
                    self.n_classes, self.n_shared_layers, self.offset,
-                   self.in_channels, self.kernel_size, self.hidden_size,
-                   self.k, self.dropout, self.loss_alphas, self.normalize_masks,
+                   self.in_channels, self.out_channels, train_dataset.harmonics,
+                   self.kernel_size, self.hidden_size,
+                   self.k, str([self.n_layers_low, self.n_layers_high, self.n_layers_full, self.n_layers_final]),
+                   self.dropout, self.loss_alphas, self.normalize_masks,
                    self.eval_version, train_dataset.mag_func,
                    train_dataset.n_frames, self.n_fft,
                    train_dataset.upper_bound_slope,
@@ -295,24 +359,12 @@ class MHMMDenseNetLSTM(SourceSeparator):
                    train_dataset.chan_swap, train_dataset.uniform_volumes,
                    train_dataset.interference, train_dataset.instrument_mask,
                    train_dataset.mask_curriculum, train_dataset.gain_slope,
-                   self.lr, self.weight_decay,
-                   self.objective, self.regression, bool(pretrained_state),
-                   self.train_class, save_dir), flush=True)
-
-        # store datasets
-        self.save_dir = save_dir
-        self.n_frames = train_dataset.n_frames
-        self.upper_bound_slope = train_dataset.upper_bound_slope
-        self.lower_bound_slope = train_dataset.lower_bound_slope
-        self.mag_func = train_dataset.mag_func
-        self.threshold = train_dataset.threshold
-        self.chan_swap = train_dataset.chan_swap
-        self.uniform_volumes = train_dataset.uniform_volumes
-        self.interference = train_dataset.interference
-        self.instrument_mask = train_dataset.instrument_mask
-        self.gain_slope = train_dataset.gain_slope
-        self.mask_curriculum = train_dataset.mask_curriculum
-        self.pretrained = bool(pretrained_state)
+                   self.lr, self.weight_decay, self.objective,
+                   train_dataset.val_pct, self.instance_norm,
+                   self.initial_norm, self.accumulate_grad,
+                   self.regression, bool(pretrained_state), self.train_class,
+                   os.path.join(save_dir, self._format_model_subdir())),
+                   flush=True)
 
         # initialize constant loaders
         val_loader = DataLoader(
@@ -343,12 +395,9 @@ class MHMMDenseNetLSTM(SourceSeparator):
         val_sar = None
         val_avg_sdr = 0
         val_med_sdr = 0
-        plateaud = False
-        last_reduced_epoch = 0
-        reduce_count = 0
 
         # train loop
-        while self.nn_epoch < self.num_epochs + 1 and not plateaud:
+        while self.nn_epoch < self.num_epochs + 1:
 
             train_loaders = self._batch_loaders(train_dataset, k=1)
 
@@ -365,54 +414,45 @@ class MHMMDenseNetLSTM(SourceSeparator):
                     # train_sdr, train_sir, train_sar, _ = self.score(
                     #     train_pred_loader)
 
-                print("\nInitializing val epoch...", flush=True)
-                val_loss = self._eval_epoch(val_loader)
-                val_sdr, val_sir, val_sar, val_cmb_sdr = self.score(
-                    val_pred_loader, framewise=True)
+                if self.nn_epoch % self.report_interval == 0:
 
-                # report
-                if train_sdr is not None:
-                    train_avg_sdr = np.round(
-                        np.mean(list(train_sdr['mean'].values())), 5)
-                    train_med_sdr = np.round(
-                        np.mean(list(train_sdr['median'].values())), 5)
-                if val_sdr is not None:
-                    val_avg_sdr = np.round(
-                        np.mean(list(val_sdr['mean'].values())), 5)
-                    val_med_sdr = np.round(
-                        np.mean(list(val_sdr['median'].values())), 5)
-                self._report(
-                    {'L1': np.round(train_loss, 5),
-                     'Avg Avg SDR': train_avg_sdr,
-                     'Avg Med SDR': train_med_sdr},
-                    train_sdr, train_sir, train_sar,
-                    {'L1': np.round(val_loss, 5),
-                     'Avg Avg SDR': val_avg_sdr,
-                     'Avg Med SDR': val_med_sdr},
-                    val_sdr, val_sir, val_sar)
+                    print("\nInitializing val epoch...", flush=True)
+                    val_loss = self._eval_epoch(val_loader)
+                    val_sdr, val_sir, val_sar, val_cmb_sdr = self.score(
+                        val_pred_loader, framewise=True)
 
-                self.plateau_scheduler.step(-val_med_sdr)
-                if self.plateau_scheduler.in_cooldown:
-                    print("Reduced Learning Rate")
-                    last_reduced_epoch = self.nn_epoch
-                    reduce_count += 1
+                    # report
+                    if train_sdr is not None:
+                        train_avg_sdr = np.round(
+                            np.mean(list(train_sdr['mean'].values())), 5)
+                        train_med_sdr = np.round(
+                            np.mean(list(train_sdr['median'].values())), 5)
+                    if val_sdr is not None:
+                        val_avg_sdr = np.round(
+                            np.mean(list(val_sdr['mean'].values())), 5)
+                        val_med_sdr = np.round(
+                            np.mean(list(val_sdr['median'].values())), 5)
+                    self._report(
+                        {'L1': np.round(train_loss, 5),
+                         'Avg Avg SDR': train_avg_sdr,
+                         'Avg Med SDR': train_med_sdr},
+                        train_sdr, train_sir, train_sar,
+                        {'L1': np.round(val_loss, 5),
+                         'Avg Avg SDR': val_avg_sdr,
+                         'Avg Med SDR': val_med_sdr},
+                        val_sdr, val_sir, val_sar)
 
-                # save best
-                if val_med_sdr > self.best_val_loss:
-                    self.best_val_loss = val_med_sdr
-                    self.torch_rng_state = torch.get_rng_state()
-                    self.numpy_rng_state = np.random.get_state()
-                    self.save()
-                    print("----------- SAVED CHECKPOINT EPOCH {} -----------".
-                          format(self.nn_epoch))
-                elif reduce_count == 2 and self.nn_epoch - last_reduced_epoch >= 10:
-                    plateaud = True
-                    self.torch_rng_state = torch.get_rng_state()
-                    self.numpy_rng_state = np.random.get_state()
-                    self.save()
-                    print("----------- SAVED CHECKPOINT EPOCH {} -----------".
-                          format(self.nn_epoch))
-                    break
+                    # self.plateau_scheduler.step(-val_med_sdr)
+
+                    # save best
+                    if val_avg_sdr + val_med_sdr > self.best_val_loss:
+                        self.best_val_loss = val_avg_sdr + val_med_sdr
+                        self.torch_rng_state = torch.get_rng_state()
+                        self.numpy_rng_state = np.random.get_state()
+                        self.save()
+                        print("--------- SAVED CHECKPOINT EPOCH {} ---------".
+                              format(self.nn_epoch))
+                self.mslr_scheduler.step()
                 self.nn_epoch += 1
 
     def predict(self, loader):
@@ -434,6 +474,8 @@ class MHMMDenseNetLSTM(SourceSeparator):
 
         if isinstance(loader.dataset, torch.utils.data.Subset):
             n_frames = loader.dataset.dataset.n_frames
+        elif isinstance(loader.dataset, torch.utils.data.ConcatDataset):
+            n_frames = loader.dataset.datasets[0].n_frames
         else:
             n_frames = loader.dataset.n_frames
 
@@ -457,7 +499,7 @@ class MHMMDenseNetLSTM(SourceSeparator):
                 if X_complex.dim() != 5:
                     # batch_size * splits x in_channels x 1025 x 129 x 2
                     X_complex = X_complex.view(
-                        bs * ns, self.in_channels, self.n_fft, n_frames, 2)
+                        bs * ns, self.out_channels, self.n_fft, n_frames, 2)
 
                 # batch_size x nclasses x in_channels x 1025 x time samples x 2
                 y = batch_samples['y_complex']
@@ -493,19 +535,19 @@ class MHMMDenseNetLSTM(SourceSeparator):
                     # batch size x nclasses x in_channels x 1025 x time samples
                     if self.regression:
                         preds = preds.view(
-                            bs, ns, self.n_classes, self.in_channels,
+                            bs, ns, self.n_classes, self.out_channels,
                             self.n_fft, n_frames)
                         preds = torch.unbind(preds, dim=1)
                         preds = torch.cat(preds, dim=4)
                     else:
                         mask = mask.view(
-                            bs, ns, self.n_classes, self.in_channels,
+                            bs, ns, self.n_classes, self.out_channels,
                             self.n_fft, n_frames)
                         mask = torch.unbind(mask, dim=1)
                         mask = torch.cat(mask, dim=4)
                     # batch_size x in_channels x 1025 x time samples x 2
                     X_complex = X_complex.view(
-                        bs, ns, self.in_channels, self.n_fft, n_frames, 2)
+                        bs, ns, self.out_channels, self.n_fft, n_frames, 2)
                     X_complex = torch.unbind(X_complex, dim=1)
                     X_complex = torch.cat(X_complex, dim=3)
 
@@ -555,7 +597,7 @@ class MHMMDenseNetLSTM(SourceSeparator):
         return self.best_val_loss + 1
 
     def _format_model_subdir(self):
-        subdir = "MHMMDenseLSTM_nc{}sl{}ic{}hs{}lr{}wd{}ob{}pt{}la{}ev{}mf{}nf{}tc{}ks{}us{}ls{}nm{}th{}nfft{}cs{}rg{}uv{}if{}of{}im{}gs{}mc{}k{}do{}".\
+        subdir = "MHMMDenseLSTM_nc{}sl{}ic{}hs{}lr{}wd{}ob{}pt{}la{}ev{}mf{}nf{}tc{}ks{}us{}ls{}nm{}th{}nfft{}cs{}rg{}uv{}if{}of{}im{}gs{}mc{}k0{}k1{}k2{}k3{}do{}oc{}hm{}in{}ag{}sn{}vp{}lh{}ll{}lf{}lff{}".\
                 format(self.n_classes, self.n_shared_layers, self.in_channels,
                        self.hidden_size, self.lr, self.weight_decay,
                        self.objective, self.pretrained,
@@ -565,7 +607,12 @@ class MHMMDenseNetLSTM(SourceSeparator):
                        self.normalize_masks, self.threshold, self.n_fft,
                        self.chan_swap, self.regression, self.uniform_volumes,
                        self.interference, self.offset, self.instrument_mask,
-                       self.gain_slope, self.mask_curriculum, self.k,
-                       self.dropout)
+                       self.gain_slope, self.mask_curriculum, self.k[0],
+                       self.k[1], self.k[2], self.k[3],
+                       self.dropout, self.out_channels,
+                       self.harmonics, self.instance_norm,
+                       self.accumulate_grad, self.initial_norm, self.val_pct,
+                       self.n_layers_low, self.n_layers_high,
+                       self.n_layers_full, self.n_layers_final)
 
         return subdir
