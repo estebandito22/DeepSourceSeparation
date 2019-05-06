@@ -42,7 +42,7 @@ def get_preds_recons(model, loader):
     y_cmplx_out = []
 
     # list of batches
-    preds, ys, cs, ts, ms = model.predict(loader)
+    preds, ys, cs, ts, ms, nm = model.predict(loader)
 
     # # only perform framewise evaluation at testing time
     if model.n_fft == 1025:
@@ -53,8 +53,8 @@ def get_preds_recons(model, loader):
         rate = 44100
         hop = 1024
         win = 4096
-    if not framewise:
-        rate = np.inf
+    # if not framewise:
+    #     rate = np.inf
 
     # for each batch
     for b_preds, b_ys, b_cs, b_ts, b_ms in tqdm(
@@ -140,17 +140,19 @@ if __name__ == '__main__':
                     help="Which sample to analyze.")
     args = vars(ap.parse_args())
 
+    dnet = MHMMDenseNetLSTM()
+    dnet.load(args['model_dir'], args['epoch'])
+
     df = pd.read_csv(args['metadata_path'])
 
-    val_predset = BandhubEvalset(df, 'val', random_seed=0)
+    val_predset = BandhubEvalset(
+        df, 'val', n_frames=dnet.n_frames, harmonics=dnet.harmonics,
+        random_seed=0)
     val_subset = Subset(val_predset, [args['sample']])
 
     val_pred_loader = DataLoader(
         val_subset, batch_size=1, shuffle=False,
         num_workers=8, collate_fn=val_predset.collate_func)
-
-    dnet = MHMMDenseNetLSTM()
-    dnet.load(args['model_dir'], args['epoch'])
 
     pred_recon, y_recon, pred_mag, y_mag, pred_c, pred_mask, pred_cmplx, y_cmplx = \
         get_preds_recons(dnet, val_pred_loader)
